@@ -1,0 +1,867 @@
+---
+title: "RNA turnover"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+author: Bingnan Li
+email: libingnan11@gmail.com
+---
+
+# I CRAC
+
+## Intrinsic Affinity to Nuclear Decay Pathway with Tollervey CRAC data
+
+### 1 Load metadata
+```{r load project metadata}
+projectdir <- "/Users/bingnanli/git/epimemintegrate"
+source(file.path(projectdir, "path.R"))
+source(file.path(slamcodedir, "stability_analysis.R"))
+source(file.path(rnacodedir, "Functions.R"))
+source(file.path(slamcodedir, "dictionarybuild.R"))
+# run the following manually
+source(file.path(slamcodedir, "GenreateClusterTest5.r"))
+myallslam <- readRDS(file.path(RNADataMiddleNewAnno, "myallslam.rds"))
+# informative column 
+# Mtr4_0_Pol Nab3_0_Pol
+```
+
+
+### 2 load annotation
+```{r annotation data loading}
+g.tx <- readRDS(file.path(annotationdir, "gtx_update2019.rds"))
+GeneGroup_good <- readRDS(file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+gtx_update2019 <- readRDS(file.path(annotationdir,"gtx_update2019.rds"))
+dict <- readRDS(file.path(annotationdir, "seqnamedict.rds"))
+Roman.g.tx_nointron <- readRDS(file.path(annotationdir,"Roman.g.tx_nointron.rds"))
+```
+
+### 3 Load tollervey datasets
+```{r add group to Tollervey}
+TollerveyNormed <- readRDS("/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/CoreDataSets/TollerveyNormed.rds")
+
+Tlv <- TollerveyNormed %>% 
+  mutate(gene = str_replace_all(gene, " ", "" ))  %>% 
+  mutate(gene = str_replace_all(gene, ",", ";" )) %>% 
+  left_join(GeneGroup_good, by = "gene") %>% 
+  filter(!is.na(cluGroup)) %>%
+  mutate(femGroup = recode(cluGroup, "Act_ActMem_ActMemEnh" = "Ind_Memory",
+       "Act_ActMem_NoInfo" = "Ind_Memory",
+       "Act_ActMem_ActMemAttenu" = "Ind_Memory",
+       "Act_NoInfo_NoInfo" = "Ind_NON_Memory",
+       "NoInfo_NoInfo_NoInfo" = "NO_Response", 
+       "Repr_NoInfo_NoInfo" = "Repr_NON_Mem",
+       "Repr_ReprMem_ReprMemAttenu" = "Repr_Mem",
+       "Repr_ReprMem_NoInfo" = "Repr_Mem",
+       "Repr_ReprMem_ReprMemEnh" = "Repr_Mem")) %>%
+  mutate(threeGroup =   recode(cluGroup, "Act_ActMem_ActMemEnh" = "Induction",
+       "Act_ActMem_NoInfo" = "Induction",
+       "Act_ActMem_ActMemAttenu" = "Induction",
+       "Act_NoInfo_NoInfo" = "Induction",
+       "NoInfo_NoInfo_NoInfo" = "NO_Response", 
+       "Repr_NoInfo_NoInfo" = "Repression",
+       "Repr_ReprMem_ReprMemAttenu" = "Repression",
+       "Repr_ReprMem_NoInfo" = "Repression",
+       "Repr_ReprMem_ReprMemEnh" = "Repression")) 
+```
+
+### 4 code to remove background grid in ggplot
+```{r ggplot remove background and grid}
+rmgrid <- theme(panel.border = element_blank(), 
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(), 
+                axis.line = element_line(colour = "black"))
+```
+
+#==================================
+# II Fig 4 intrinsic affinity of induction and repression genes to TRAMP and NNS complex
+
+### 1 calculate p value
+```{r CRAC p value calculation function}
+Tlvstat <- function(sample = "Mtr4_0_Pol", whichgroup = "femGroup", group1 = "NO_Response", group2 = "Repr_NON_Mem") {
+  a <- Tlv %>% filter(!!as.symbol(sample) > 0)  %>% filter(!!as.symbol(whichgroup) == group1) %>% pull(!!as.symbol(sample))
+  b <- Tlv %>% filter(!!as.symbol(sample) > 0)  %>% filter(!!as.symbol(whichgroup) == group2) %>% pull(!!as.symbol(sample))
+  wilcox.test(a, b)
+}
+```
+
+
+### 2  Plot CRAC
+```{r Tollervey A.	Simple panel with Nab 3 and Mtr4 with induction and repression genes. Only 2 box plots with the points inside and the significance.}
+
+# Fig 4 A ----
+Tlv %>% 
+  filter(Mtr4_0_Pol > 0) %>% 
+  ggplot(aes(x= threeGroup, y = Mtr4_0_Pol)) +
+  geom_boxplot() + 
+  geom_jitter() + 
+  coord_cartesian(ylim=c(0,4)) + 
+  rmgrid
+### number of each group
+Tlv %>% 
+  filter(Mtr4_0_Pol > 0)  %>% pull(threeGroup) %>% table()
+
+# Fig 4 B ----
+Tlv %>% 
+  filter(Nab3_0_Pol > 0) %>% 
+  ggplot(aes(x= threeGroup, y = Nab3_0_Pol)) +
+  geom_boxplot() + 
+  geom_jitter() + 
+  coord_cartesian(ylim=c(0,4)) + 
+  rmgrid
+### number of each group
+Tlv %>% 
+  filter(Nab3_0_Pol > 0)  %>% pull(threeGroup) %>% table()
+
+
+
+# statistics Induction Repression
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "threeGroup", group1 = "NO_Response", group2 = "Induction")
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "threeGroup", group1 = "NO_Response", group2 = "Repression")
+
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "threeGroup", group1 = "NO_Response", group2 = "Induction")
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "threeGroup", group1 = "NO_Response", group2 = "Repression")
+```
+
+### Fig4 memory genes differential affinity to TRAMP NNS 
+
+```{r five group of gene TRAMP NNS }
+# Fig 4 C ----
+Tlv %>% filter(Mtr4_0_Pol > 0) %>% 
+  ggplot(aes(x= femGroup, y = Mtr4_0_Pol)) +
+  geom_boxplot() + 
+  geom_jitter() + 
+  coord_cartesian(ylim=c(0,5)) + 
+  rmgrid
+
+### number of each group
+Tlv %>% 
+  filter(Mtr4_0_Pol > 0)  %>% pull(femGroup) %>% table()
+
+# Fig 4 D ----
+Tlv %>% filter(Nab3_0_Pol > 0)  %>% 
+  ggplot(aes(x= femGroup, y = Nab3_0_Pol)) +
+  geom_boxplot()+ 
+  geom_jitter()   + 
+  coord_cartesian(ylim=c(0,5)) + 
+  rmgrid
+### number of each group
+Tlv %>% 
+  filter(Nab3_0_Pol > 0)  %>% pull(femGroup) %>% table()
+
+######## five group statistics -------------
+# Nab3
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "femGroup", group1 = "NO_Response", group2 = "Ind_NON_Memory")
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "femGroup", group1 = "Ind_Memory", group2 = "Ind_NON_Memory")
+
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "femGroup", group1 = "NO_Response", group2 = "Repr_NON_Mem")
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "femGroup", group1 = "Repr_Mem", group2 = "Repr_NON_Mem")
+
+# Mtr4
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "femGroup", group1 = "NO_Response", group2 = "Ind_NON_Memory")
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "femGroup", group1 = "Ind_Memory", group2 = "Ind_NON_Memory")
+
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "femGroup", group1 = "NO_Response", group2 = "Repr_NON_Mem")
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "femGroup", group1 = "Repr_Mem", group2 = "Repr_NON_Mem")
+```
+
+
+
+### Fig4 memory genes differential affected by rrp6 affinity to TRAMP NNS 
+
+```{r Panel showing activation memory first in respect to rrp6}
+b <- Tlv %>% filter(femGroup == "Ind_Memory") 
+b$cluGroup <- factor(b$cluGroup,levels = c("Act_ActMem_ActMemEnh", "Act_ActMem_NoInfo", "Act_ActMem_ActMemAttenu"))
+
+b %>% filter(Mtr4_0_Pol > 0) %>% ggplot(aes(x= cluGroup, y = Mtr4_0_Pol)) +
+  geom_boxplot() + geom_jitter() + coord_cartesian(ylim=c(0,5)) + rmgrid
+
+b %>% filter(Nab3_0_Pol > 0) %>% ggplot(aes(x= cluGroup, y = Nab3_0_Pol)) +
+  geom_boxplot() + geom_jitter() + coord_cartesian(ylim=c(0,5)) + rmgrid
+
+# gene numbers in each group
+b %>% filter(Mtr4_0_Pol > 0)  %>% pull(cluGroup) %>% table()
+b %>% filter(Nab3_0_Pol > 0)  %>% pull(cluGroup) %>% table()
+
+# statistics between groups
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "cluGroup", group1 = "Act_ActMem_NoInfo", group2 = "Act_ActMem_ActMemEnh")
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "cluGroup", group1 = "Act_ActMem_NoInfo", group2 = "Act_ActMem_ActMemAttenu")
+
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "cluGroup", group1 = "Act_ActMem_NoInfo", group2 = "Act_ActMem_ActMemEnh")
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "cluGroup", group1 = "Act_ActMem_NoInfo", group2 = "Act_ActMem_ActMemAttenu")
+```
+
+
+```{r Same but for repression memory after in respect to rrp6} 
+b <- Tlv %>% filter(femGroup == "Repr_Mem") 
+b$cluGroup <- factor(b$cluGroup,levels = c("Repr_ReprMem_ReprMemAttenu", "Repr_ReprMem_NoInfo", "Repr_ReprMem_ReprMemEnh"))
+
+b %>% filter(Mtr4_0_Pol > 0) %>% 
+  ggplot(aes(x= cluGroup, y = Mtr4_0_Pol)) +  
+  geom_jitter() +
+  geom_boxplot() + 
+  coord_cartesian(ylim=c(0,5)) + 
+  rmgrid
+
+b %>% filter(Nab3_0_Pol > 0) %>% ggplot(aes(x= cluGroup, y = Nab3_0_Pol)) +  geom_jitter() +
+  geom_boxplot() + coord_cartesian(ylim=c(0,5))+ rmgrid
+
+# number of gene in each group
+b %>% filter(Mtr4_0_Pol > 0)  %>% pull(cluGroup) %>% table()
+b %>% filter(Nab3_0_Pol > 0)  %>% pull(cluGroup) %>% table()
+
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "cluGroup", group1 = "Repr_ReprMem_NoInfo", group2 = "Repr_ReprMem_ReprMemEnh")
+Tlvstat(sample = "Mtr4_0_Pol", whichgroup = "cluGroup", group1 = "Repr_ReprMem_NoInfo", group2 = "Repr_ReprMem_ReprMemAttenu")
+
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "cluGroup", group1 = "Repr_ReprMem_NoInfo", group2 = "Repr_ReprMem_ReprMemEnh")
+Tlvstat(sample = "Nab3_0_Pol", whichgroup = "cluGroup", group1 = "Repr_ReprMem_NoInfo", group2 = "Repr_ReprMem_ReprMemAttenu")
+```
+#===================================
+
+# III Slamseq
+
+## 1 reverse complementary
+```{bash revercomplementary}
+slamdir=/home/binli/memory/slamseq
+module load bioinfo-tools
+module load gnuparallel/20180822
+module load SeqKit/0.15.0
+cd $slamdir/fastq
+find *.fastq.gz | parallel -a - -j 16 seqkit seq --seq-type DNA -r -p {} '|' gzip -c  '>' $slamdir/RCfastq/{}
+```
+
+## 2 Nextflow Slamseq
+```{bash}
+tmux new -s slamdunkspikein
+
+export workdir=/home/binli/memory/slamseq
+export rcfastqdir=/home/binli/memory/slamseq/RCfastq
+export metadir=/home/binli/memory/slamseq/meta
+export utrbed=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/gtx_update2019_roman.bed
+
+module load bioinfo-tools Nextflow/20.10.0
+export NXF_HOME=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow
+export NXF_SINGULARITY_CACHEDIR=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/singularity
+
+
+nextflow run /crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/slamseq/main.nf \
+-profile uppmax \
+--trim5 30 \
+--project snic2017-7-122 \
+--fasta /crex/data/igenomes/Saccharomyces_cerevisiae/UCSC/sacCer3/Sequence/WholeGenomeFasta/genome.fa \
+--bed $utrbed \
+--conversions 2 \
+--input $metadir/slamsample_meta.txt \
+--email_on_fail $myemail \
+--read_length 150 \
+--max_memory 120.GB \
+--max_time 24.h \
+--max_cpus 16 \
+--skip_deseq2 \
+--multimappers \
+-bg
+```
+
+## 3.1 slamdunk counts manually summarised into R
+```{r load nfcore slamdunk counts into R}
+twoconversionTrim30dir <- "/Users/bingnanli/Downloads/slamseq/twoconversion_trim30/count/genes"
+setwd(twoconversionTrim30dir)
+filesSlamDunk <- list.files(pattern = "_slamdunk_mapped_filtered_tcount_collapsed")
+allcounts <- map(filesSlamDunk, read_delim, col_names = TRUE, skip = 1, delim = "\t")
+samples <- str_replace_all(filesSlamDunk, "_S[:digit:]+_R[:digit:]+_001_trimmed.fq_slamdunk_mapped_filtered_tcount_collapsed.csv", "")
+allcounts <- set_names(allcounts, samples)
+
+renamecolumn <- function(mytbl = allcounts[[1]], sample = names(allcounts)[1]) {
+  newtbl <- mytbl %>%
+    mutate(turnover = tcReadCount / (readCount + 0.01)) 
+  colnames(newtbl)[3:11] <- paste0(sample, ".",colnames(newtbl)[3:11]) 
+  return(newtbl)
+}
+allcounts <- imap(allcounts,  ~ renamecolumn(mytbl = .x, sample = .y))
+twoconversionTrim30Counts <- allcounts %>%
+  reduce(left_join, by = c("gene_name", "length"))
+saveRDS(twoconversionTrim30Counts, file.path(slamdir, "twoconversionTrim30Counts.rds"))
+```
+
+## 3.2 merge replicates
+
+```{r merge replicates}
+# load the raw counts of slamseq
+twoconversionTrim30Counts <- readRDS(file.path(slamdir, "twoconversionTrim30Counts.rds"))
+
+# remove the extremly noisy low expression genes
+blacklist <- twoconversionTrim30Counts %>%
+  filter_at(vars(ends_with("T0.readCount")), any_vars(. < 20)) %>%
+  dplyr::select(gene_name)
+conversion <- twoconversionTrim30Counts 
+
+# For Gene level T-C conversion rate calculated by slamdunk
+conversionratio <- conversion %>%
+  select(gene_name, ends_with("turnover")) 
+colnames(conversionratio) <- str_replace_all(colnames(conversionratio), ".turnover", "")
+
+
+ConRatio <- conversionratio %>%
+  mutate(BY_1st_T0 = (BY01_1st_T0 + BY02_1st_T0 + BY03_1st_T0)/3,
+         BY_1st_T30 = (BY01_1st_T30 + BY02_1st_T30 + BY03_1st_T30)/3,
+         BY_2nd_T0 = (BY01_2nd_T0 + BY02_2nd_T0 + BY03_2nd_T0)/3,
+         BY_2nd_T30 = (BY01_2nd_T30 + BY02_2nd_T30 + BY03_2nd_T30)/3,
+         rrp_1st_T0 = (rrp01_1st_T0 + rrp02_1st_T0 + rrp03_1st_T0)/3,
+         rrp_1st_T30 = (rrp01_1st_T30 + rrp02_1st_T30 + rrp03_1st_T30)/3,
+         rrp_2nd_T0 = (rrp01_2nd_T0 + rrp02_2nd_T0 + rrp03_2nd_T0)/3,
+         rrp_2nd_T30 = (rrp01_2nd_T30 + rrp02_2nd_T30 + rrp03_2nd_T30)/3
+  ) %>%
+  mutate(BY_T0 = BY_2nd_T0 / BY_1st_T0, 
+         rrp_T0 = rrp_2nd_T0 / rrp_1st_T0, 
+  ) %>%
+  select(gene_name, starts_with(c("BY_", "rrp_"))) 
+
+saveRDS(ConRatio, "/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/epimemintegrate_data/Slamseq/in_paper/ConRatio.rds")
+
+GEOuploadtable <-  conversionratio %>%
+  mutate(BY_1st_T0_merge = (BY01_1st_T0 + BY02_1st_T0 + BY03_1st_T0)/3,
+         BY_1st_T30_merge = (BY01_1st_T30 + BY02_1st_T30 + BY03_1st_T30)/3,
+         BY_2nd_T0_merge = (BY01_2nd_T0 + BY02_2nd_T0 + BY03_2nd_T0)/3,
+         BY_2nd_T30_merge = (BY01_2nd_T30 + BY02_2nd_T30 + BY03_2nd_T30)/3,
+         rrp_1st_T0_merge = (rrp01_1st_T0 + rrp02_1st_T0 + rrp03_1st_T0)/3,
+         rrp_1st_T30_merge = (rrp01_1st_T30 + rrp02_1st_T30 + rrp03_1st_T30)/3,
+         rrp_2nd_T0_merge = (rrp01_2nd_T0 + rrp02_2nd_T0 + rrp03_2nd_T0)/3,
+         rrp_2nd_T30_merge = (rrp01_2nd_T30 + rrp02_2nd_T30 + rrp03_2nd_T30)/3
+  ) %>%
+  mutate(BY_T0_primed_naive_ratio = BY_2nd_T0_merge / BY_1st_T0_merge, 
+         rrp_T0_primed_naive_ratio = rrp_2nd_T0_merge / rrp_1st_T0_merge, 
+  ) %>% left_join(conversion, by = "gene_name")
+
+write_delim(GEOuploadtable,file =  "/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/epimemintegrate_data/Slamseq/in_paper/SLAMseq_table.txt", delim = "\t")
+```
+
+## 3.3 global nascent ratio 
+
+```{r slamseq global ratio level compare}
+# calculation by all nascent reads devided by total reads 
+# only calculate the coding genes
+# exclude CUTs and SUTs
+
+slamglobalratio <- twoconversionTrim30Counts %>% 
+  select(gene_name, ends_with("readCount"), ends_with("tcReadCount"))  %>% 
+  filter(!grepl("CUT|SUT", gene_name)) %>%
+  select(- gene_name) %>%
+  colSums() %>%
+  as.data.frame() %>% t() %>% as_tibble() %>%
+  mutate(BY01_1st_T0 = BY01_1st_T0.tcReadCount / BY01_1st_T0.readCount,
+         BY02_1st_T0 = BY02_1st_T0.tcReadCount / BY02_1st_T0.readCount,
+         BY03_1st_T0 = BY03_1st_T0.tcReadCount / BY03_1st_T0.readCount,
+         BY01_1st_T30 = BY01_1st_T30.tcReadCount / BY01_1st_T30.readCount,
+         BY02_1st_T30 = BY02_1st_T30.tcReadCount / BY02_1st_T30.readCount,
+         BY03_1st_T30 = BY03_1st_T30.tcReadCount / BY03_1st_T30.readCount,
+         BY01_2nd_T0 = BY01_2nd_T0.tcReadCount / BY01_2nd_T0.readCount,
+         BY02_2nd_T0 = BY02_2nd_T0.tcReadCount / BY02_2nd_T0.readCount,
+         BY03_2nd_T0 = BY03_2nd_T0.tcReadCount / BY03_2nd_T0.readCount,
+         BY01_2nd_T30 = BY01_2nd_T30.tcReadCount / BY01_2nd_T30.readCount,
+         BY02_2nd_T30 = BY02_2nd_T30.tcReadCount / BY02_2nd_T30.readCount,
+         BY03_2nd_T30 = BY03_2nd_T30.tcReadCount / BY03_2nd_T30.readCount,
+         rrp01_1st_T0 = rrp01_1st_T0.tcReadCount / rrp01_1st_T0.readCount,
+         rrp02_1st_T0 = rrp02_1st_T0.tcReadCount / rrp02_1st_T0.readCount,
+         rrp03_1st_T0 = rrp03_1st_T0.tcReadCount / rrp03_1st_T0.readCount,
+         rrp01_1st_T30 = rrp01_1st_T30.tcReadCount / rrp01_1st_T30.readCount,
+         rrp02_1st_T30 = rrp02_1st_T30.tcReadCount / rrp02_1st_T30.readCount,
+         rrp03_1st_T30 = rrp03_1st_T30.tcReadCount / rrp03_1st_T30.readCount,
+         rrp01_2nd_T0 = rrp01_2nd_T0.tcReadCount / rrp01_2nd_T0.readCount,
+         rrp02_2nd_T0 = rrp02_2nd_T0.tcReadCount / rrp02_2nd_T0.readCount,
+         rrp03_2nd_T0 = rrp03_2nd_T0.tcReadCount / rrp03_2nd_T0.readCount,
+         rrp01_2nd_T30 = rrp01_2nd_T30.tcReadCount / rrp01_2nd_T30.readCount,
+         rrp02_2nd_T30 = rrp02_2nd_T30.tcReadCount / rrp02_2nd_T30.readCount,
+         rrp03_2nd_T30 = rrp03_2nd_T30.tcReadCount / rrp03_2nd_T30.readCount) %>%
+  select(BY01_1st_T0 : rrp03_2nd_T30) 
+
+saveRDS(slamglobalratio, file.path(slammiddle, "slamglobalratio.rds"))
+```
+
+## 3.4 attach gene groups to slamseq count table
+
+```{r slamseq dataframe}
+annos <- mcols(gtx_update2019)[,c("name", "comName")] %>% as.data.frame() %>% modify_if(is.factor, as.character)
+
+# ConRatio <- readRDS(file.path(slamdir, "twoconversionTrim30ConRatio.rds"))
+
+ConRatio <- readRDS("/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/epimemintegrate_data/Slamseq/in_paper/ConRatio.rds")
+
+myslam <- ConRatio %>% left_join(annos, by = c("gene_name" = "comName")) %>% left_join(GeneGroup_good, by = c("name" = "gene")) 
+
+myallslam  <- myslam %>% 
+  mutate(femGroup =   recode(cluGroup, "Act_ActMem_ActMemEnh" = "Ind_Memory",
+       "Act_ActMem_NoInfo" = "Ind_Memory",
+       "Act_ActMem_ActMemAttenu" = "Ind_Memory",
+       "Act_NoInfo_NoInfo" = "Ind_NON_Memory",
+       "NoInfo_NoInfo_NoInfo" = "NO_Response", 
+       "Repr_NoInfo_NoInfo" = "Repr_NON_Mem",
+       "Repr_ReprMem_ReprMemAttenu" = "Repr_Mem",
+       "Repr_ReprMem_NoInfo" = "Repr_Mem",
+       "Repr_ReprMem_ReprMemEnh" = "Repr_Mem")) %>%
+  mutate(threeGroup =   recode(cluGroup, "Act_ActMem_ActMemEnh" = "Induction",
+       "Act_ActMem_NoInfo" = "Induction",
+       "Act_ActMem_ActMemAttenu" = "Induction",
+       "Act_NoInfo_NoInfo" = "Induction",
+       "NoInfo_NoInfo_NoInfo" = "NO_Response", 
+       "Repr_NoInfo_NoInfo" = "Repression",
+       "Repr_ReprMem_ReprMemAttenu" = "Repression",
+       "Repr_ReprMem_NoInfo" = "Repression",
+       "Repr_ReprMem_ReprMemEnh" = "Repression")) %>%
+  mutate(type = case_when(grepl("CUT", gene_name) ~ "CUT",
+                          grepl("SUT", gene_name) ~ "SUT",
+                          T ~ "ORFt")) 
+
+myallslam$cluGroup <- factor(myallslam$cluGroup, 
+                             levels = c("Act_ActMem_ActMemEnh", 
+                                        "Act_ActMem_NoInfo", 
+                                        "Act_ActMem_ActMemAttenu", 
+                                        "Act_NoInfo_NoInfo", 
+                                        "NoInfo_NoInfo_NoInfo", 
+                                        "Repr_NoInfo_NoInfo", 
+                                        "Repr_ReprMem_ReprMemAttenu", 
+                                        "Repr_ReprMem_NoInfo", 
+                                        "Repr_ReprMem_ReprMemEnh"))
+
+
+# save data
+saveRDS(annos, file.path(RNADataMiddleNewAnno, "annos.rds"))
+saveRDS(myslam, file.path(RNADataMiddleNewAnno, "myslam.rds"))
+saveRDS(myallslam, file.path(RNADataMiddleNewAnno, "myallslam.rds"))
+```
+
+```{r}
+myslam <- readRDS(file.path(RNADataMiddleNewAnno, "myslam.rds"))
+```
+
+#====================================
+
+# IV Figure 5
+
+```{r Figure 5: SLAM-Seq A.	turnover in t0s for all genes. With significance changes}
+myallslam <- readRDS(file.path(RNADataMiddleNewAnno, "myallslam.rds"))
+
+rmgrid <- theme(panel.border = element_blank(), 
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(), 
+                axis.line = element_line(colour = "black"))
+
+# Fig S4 A ----
+myallslam %>% select(BY_1st_T0, BY_1st_T30, BY_2nd_T0, BY_2nd_T30) %>%
+  gather(key = "sample", value = "turnover") %>%
+  ggplot(aes(x = sample, y = turnover)) +
+  geom_jitter() +
+  geom_boxplot() + rmgrid
+
+myallslam %>% select(rrp_1st_T0, rrp_1st_T30, rrp_2nd_T0, rrp_2nd_T30) %>%
+  gather(key = "sample", value = "turnover") %>%
+  ggplot(aes(x = sample, y = turnover)) +
+  geom_jitter() +
+  geom_boxplot() + ylim(c(0,1))  +rmgrid
+
+## p value calculation
+Fig6Atestp <- function(x = "BY_1st_T0", y = "BY_2nd_T0") {
+  a <- ConRatio %>% filter(!grepl("CUT|SUT", gene_name)) %>% pull(x)
+  b <- ConRatio %>% filter(!grepl("CUT|SUT", gene_name)) %>% pull(y)
+  wilcox.test(a,b)
+}
+
+Fig6Atestp(x = "BY_1st_T0", y = "BY_2nd_T0")
+Fig6Atestp(x = "rrp_1st_T0", y = "rrp_2nd_T0")
+Fig6Atestp(x = "BY_1st_T0", y = "rrp_1st_T0")
+
+# Fig 5 start ----
+
+#### extract those genes that are not zero in tollervey data
+TlvGene <- Tlv %>% filter(Mtr4_0_Pol != 0) %>% select(gene) 
+
+drawslam <- function(x = "threeGroup", y = "BY_1st_T0", ylim = c(0,0.9)) {
+  myallslam %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = x, y = y)) + 
+    geom_jitter() + 
+    geom_boxplot()  + 
+    coord_cartesian(ylim=ylim) + 
+    rmgrid
+}
+
+## plot in paper
+## compare primed vs naive state
+# Fig 5 B 1 ----
+##  3 groups
+drawslam(x = "threeGroup", y = "BY_T0", ylim=c(0.5,1.25))
+drawslam(x = "threeGroup", y = "rrp_T0", ylim=c(0.5,1.25))
+
+myallslam %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% pull(threeGroup) %>% table
+
+# calculate p value
+threetestpvalue <- function(group1 = "Induction", group2 = "NO_Response", whichcol = "BY_T0") {
+  x <- myallslam %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(threeGroup ==  group1) %>% pull(whichcol)
+y  <- myallslam %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(threeGroup ==  group2) %>% pull(whichcol)
+wilcox.test(x, y)
+}
+
+threetestpvalue(group1 = "Induction", group2 = "NO_Response", whichcol = "BY_T0")
+threetestpvalue(group1 = "Repression", group2 = "NO_Response", whichcol = "BY_T0")
+
+threetestpvalue(group1 = "Induction", group2 = "NO_Response", whichcol = "rrp_T0")
+threetestpvalue(group1 = "Repression", group2 = "NO_Response", whichcol = "rrp_T0")
+
+# Fig 5 C ----
+##  5 groups
+# plot in paper
+drawslam(x = "femGroup", y = "BY_T0", ylim = c(0.6,1))
+
+myallslam %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% pull(femGroup) %>% table
+
+# Fig 5 G ----
+drawslam(x = "femGroup", y = "rrp_T0", ylim = c(0.6,1))
+
+# calculate p value
+femtestpvalue <- function(group1 = "Repr_Mem", group2 = "Repr_NON_Mem", whichcol = "BY_T0") {
+  x <- myallslam %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(femGroup ==  group1) %>% pull(whichcol)
+y  <- myallslam %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(femGroup ==  group2) %>% pull(whichcol)
+wilcox.test(x, y)
+}
+
+femtestpvalue(group1 = "Repr_Mem", group2 = "Repr_NON_Mem", whichcol = "BY_T0")
+femtestpvalue(group1 = "NO_Response", group2 = "Repr_NON_Mem", whichcol = "BY_T0")
+femtestpvalue(group1 = "Ind_Memory", group2 = "Ind_NON_Memory", whichcol = "BY_T0")
+femtestpvalue(group1 = "NO_Response", group2 = "Ind_NON_Memory", whichcol = "BY_T0")
+
+femtestpvalue(group1 = "Repr_Mem", group2 = "Repr_NON_Mem", whichcol = "rrp_T0")
+femtestpvalue(group1 = "NO_Response", group2 = "Repr_NON_Mem", whichcol = "rrp_T0")
+femtestpvalue(group1 = "Ind_Memory", group2 = "Ind_NON_Memory", whichcol = "rrp_T0")
+femtestpvalue(group1 = "NO_Response", group2 = "Ind_NON_Memory", whichcol = "rrp_T0")
+
+# 9 groups
+
+# compare T0 and T0' in wild type
+
+ClutestPvalue <- function(group1 = "Act_ActMem_ActMemEnh", group2 = "Act_ActMem_NoInfo", whichcol = "BY_T0") {
+  x <- myallslam %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(cluGroup ==  group1) %>% pull(whichcol)
+y  <- myallslam %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(cluGroup ==  group2) %>% pull(whichcol)
+wilcox.test(x, y)
+}
+
+
+drawslam(x = "cluGroup", y = "BY_T0", ylim = c(0.25,1.5))
+
+# Fig S4 C ---- 
+# stabilization of CUTs
+# 
+
+ConRatio_type <- ConRatio %>% mutate(type = case_when(grepl("CUT", gene_name) ~ "CUT",
+                                     grepl("SUT", gene_name) ~ "SUT",
+                                     TRUE ~ "ORF-T")) 
+# wild type
+ConRatio_type %>% 
+  filter(complete.cases(.)) %>% 
+  select(BY_1st_T0, type) %>% 
+  ggplot(aes(x = type, y = BY_1st_T0)) + 
+  geom_jitter() +
+  geom_boxplot() + 
+  coord_cartesian(ylim=c(0,1)) + 
+  rmgrid
+
+ConRatio_type %>% 
+  filter(complete.cases(.)) %>% 
+  select(rrp_1st_T0, type) %>% 
+  ggplot(aes(x = type, y = rrp_1st_T0)) + 
+  geom_jitter() +
+  geom_boxplot() + 
+  coord_cartesian(ylim=c(0,1)) + 
+  rmgrid
+
+x <- ConRatio %>% filter(grepl("CUT", gene_name)) %>% filter(complete.cases(.)) %>% pull(BY_1st_T0)
+y <- ConRatio %>% filter(grepl("CUT", gene_name)) %>% filter(complete.cases(.)) %>% pull(rrp_1st_T0)
+wilcox.test(x,y)
+
+x <- ConRatio %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(complete.cases(.)) %>% pull(BY_1st_T0)
+y <- ConRatio %>% filter(!grepl("CUT|SUT", gene_name)) %>% filter(complete.cases(.)) %>% pull(rrp_1st_T0)
+wilcox.test(x,y)
+
+# Fig 5 D ----
+myallslam %>%
+  filter(grepl("ReprMem", cluGroup)) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = "cluGroup", y = "BY_T0")) + 
+    geom_jitter() + 
+    geom_boxplot()  + 
+    coord_cartesian(ylim=c(0.6,1.2)) + 
+    rmgrid
+
+myallslam %>%
+  filter(grepl("ReprMem", cluGroup)) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% pull(cluGroup) %>% table
+
+# Fig 5 H ----
+myallslam %>%
+  filter(grepl("ReprMem", cluGroup)) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = "cluGroup", y = "rrp_T0")) + 
+    geom_jitter() + 
+    geom_boxplot()  + 
+    coord_cartesian(ylim=c(0.6,1.2)) + 
+    rmgrid
+
+myallslam %>%
+  filter(grepl("ReprMem", cluGroup)) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>%  pull(cluGroup) %>% table
+  
+# Fig S4 B ----
+myallslam %>%
+  filter(grepl("ActMem", cluGroup)) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = "cluGroup", y = "BY_T0")) + 
+    geom_jitter() + 
+    geom_boxplot()  + 
+    coord_cartesian(ylim=c(0.4,1.2)) + 
+    rmgrid
+
+# Fig S4 D ----
+myallslam %>%
+  filter(grepl("ActMem", cluGroup)) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = "cluGroup", y = "rrp_T0")) + 
+    geom_jitter() + 
+    geom_boxplot()  + 
+    coord_cartesian(ylim=c(0.4,1.2)) + 
+    rmgrid
+
+# Fig S4 E ----
+ myallslam %>%
+  select(gene_name, BY_1st_T0, BY_2nd_T0, femGroup) %>%
+  gather(key = "time", value = "ratio", BY_1st_T0, BY_2nd_T0) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = "femGroup", y = "ratio", fill = "time", color = "time")) + 
+    geom_jitter() + 
+    geom_boxplot() + 
+    coord_cartesian(ylim=c(0, 1)) +
+    rmgrid
+
+# Fig S4 F ----
+ myallslam %>%
+  select(gene_name, rrp_1st_T0, rrp_2nd_T0, femGroup) %>%
+  gather(key = "time", value = "ratio", rrp_1st_T0, rrp_2nd_T0) %>%
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  ggplot(aes_string(x = "femGroup", y = "ratio", fill = "time", color = "time")) + 
+    geom_jitter() + 
+    geom_boxplot() + 
+    coord_cartesian(ylim=c(0, 1)) +
+    rmgrid
+
+```
+
+#===================================
+# TableS4_Slamseq Ratios and GO
+
+```{r}
+dic_name_comName <- readRDS(file.path(annotationdir, "dic_name_comName.rds"))
+
+myallslam %>% mutate(group = recode(cluGroup, 
+                        "Act_ActMem_ActMemEnh"="Induction Memory Enhanced",
+                        "Act_ActMem_NoInfo"="Induction Memory Not Affected",
+                        "Act_ActMem_ActMemAttenu"="Induction Memory Attenuated",
+                        "Act_NoInfo_NoInfo"="Induction with No Memory",
+                        "NoInfo_NoInfo_NoInfo"="Genes NotChanged",
+                        "Repr_NoInfo_NoInfo"="Repression with NO Memeory",
+                        "Repr_ReprMem_ReprMemAttenu"="Repression Memory Attenuated",
+                        "Repr_ReprMem_NoInfo"="Repression Memory Not Affected",
+                        "Repr_ReprMem_ReprMemEnh"="Repression Memory Enhanced"))  %>% 
+  left_join(dic_name_comName, by = "name") %>% 
+  mutate(genetype = case_when(grepl("CUT", name) ~ "CUTs",
+                              grepl("SUT", name) ~ "SUTs",
+                              TRUE ~ "ORFt")) %>% 
+  arrange(desc(genetype), group) %>%
+  select(name, comName, group, BY_1st_T0:BY_2nd_T30, rrp_1st_T0:rrp_2nd_T30, BY_T0, rrp_T0) %>%
+  write_delim(file.path(slammiddle, "TableS4_Slamseq.txt"), delim = "\t")
+
+quantile(myallslam %>% drop_na() %>% pull(BY_T0))
+
+# > quantile(myallslam %>% drop_na() %>% pull(BY_T0))
+#        0%       25%       50%       75%      100% 
+# 0.0000000 0.7955108 0.8387389 0.8785314       Inf 
+
+higher_turnover <- myallslam %>% drop_na() %>% filter(BY_T0 > 0.8785314)
+
+extract_gene_slam <- function(mydf = myallslam) {
+  mygene <-  mydf %>%
+    filter(!grepl("CUT|SUT", name)) %>%
+    separate(name, into = c("gene", "second"), sep = ";")
+  geneA <- mygene %>% pull(gene)
+  geneB <- mygene %>% pull(second)
+  geneB <- geneB[!is.na(geneB)]
+  mygenes <- c(geneA, geneB)
+  return(mygenes)
+}  
+
+higher_turnover <- extract_gene_slam(myallslam %>% drop_na() %>% filter(BY_T0 > 0.8785314))
+lower_turnover <- extract_gene_slam(myallslam %>% drop_na() %>% filter(BY_T0 < 0.7955108))
+
+library("clusterProfiler")
+library(org.Sc.sgd.db)
+keytypes(org.Sc.sgd.db) 
+
+geneList_all <- extract_gene_slam(myallslam)
+
+highturnover.ego <- enrichGO(higher_turnover, universe = geneList_all, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(highturnover.ego@result, file.path(slammiddle, "GO_highturnover_ego.tab"), delim = "\t")
+barplot(highturnover.ego,showCategory=20,drop=T)
+
+
+lower_turnover.ego <- enrichGO(lower_turnover, universe = geneList_all, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(lower_turnover.ego@result, file.path(slammiddle, "GO_lower_turnover_ego.tab"), delim = "\t")
+barplot(lower_turnover.ego,showCategory=20,drop=T)
+
+
+
+
+```
+
+
+## local path to slamdunk trim5' 30bp codes
+
+```{bash nextflow command to generate }
+nextflow run /crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/slamseq/main.nf \
+-profile uppmax \
+--trim5 30 --project snic2017-7-122 \
+--fasta /crex/data/igenomes/Saccharomyces_cerevisiae/UCSC/sacCer3/Sequence/WholeGenomeFasta/genome.fa \
+--bed /crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/gtx_update2019_roman.bed \
+--conversions 2 \
+--input /home/binli/memory/slamseq/meta/slamsample_meta.txt \
+--read_length 150 \
+--max_memory 120.GB \
+--max_time 24.h \
+--max_cpus 16 \
+-bg
+
+```
+
+
+```{r generate slamseq size factor}
+# step 1 get the read counts from ORFt and feed into DESEQ2 to calculate the size factor there 
+slamcountORFt <- twoconversionTrim30Counts %>% 
+  filter(!grepl("CUT|SUT", gene_name)) %>% 
+  as.data.frame() %>%
+  column_to_rownames(var = "gene_name") %>%
+  select(ends_with(".readCount")) %>% 
+  mutate_all(list(as.integer))
+
+colnames(slamcountORFt) <-  str_replace_all(colnames(slamcountORFt), ".readCount", "")
+
+
+# reorder count table
+slam_sampleorder <- c("BY01_1st_T0", 
+                 "BY01_1st_T30",
+                 "BY01_2nd_T0", 
+                 "BY01_2nd_T30",
+                 "rrp01_1st_T0",
+                 "rrp01_1st_T30",
+                 "rrp01_2nd_T0",
+                 "rrp01_2nd_T30",
+                 "BY02_1st_T0", 
+                 "BY02_1st_T30",
+                 "BY02_2nd_T0",
+                 "BY02_2nd_T30",
+                 "rrp02_1st_T0",
+                 "rrp02_1st_T30",
+                 "rrp02_2nd_T0",
+                 "rrp02_2nd_T30",
+                 "BY03_1st_T0",
+                 "BY03_1st_T30",
+                 "BY03_2nd_T0",
+                 "BY03_2nd_T30",
+                 "rrp03_1st_T0",
+                 "rrp03_1st_T30",
+                 "rrp03_2nd_T0",
+                 "rrp03_2nd_T30")
+
+slamcountORFt  <- slamcountORFt[, slam_sampleorder]
+
+## ------------- count data frame is ready --------------------------###
+
+cold_slam <- data.frame(strain = factor(rep(rep(c("wt", "rrp6"), each = 4), 3)),
+                   minute = factor(rep(c("000", "005", "200", "205"), 6)),
+                   replicate = factor(rep(c("r1", "r2", "r3"), each = 8))) %>%
+  tibble::as_tibble() %>%
+  unite(col = sample, strain, minute, sep = "_", remove = T) %>%
+  mutate(sample= factor(sample)) %>%
+  as.data.frame()
+cold_slam$sample <- relevel(cold_slam$sample, ref = "wt_000")
+row.names(cold_slam) <- names(slamcountORFt)
+
+## ---------------- meta data is ready --------------- ##
+
+ddsFullCountTable_orf_slam <- DESeqDataSetFromMatrix(countData = slamcountORFt, 
+                                                colData = cold_slam, 
+                                                design = ~ sample)
+
+## --------DESEQ object ready -------------------- ## 
+dds_orf_slam <- DESeq(ddsFullCountTable_orf_slam)
+saveRDS(dds_orf_slam, file.path(slammiddle, "dds_orf_slam.rds"))
+SLAMorfSizeFactors <- sizeFactors(dds_orf_slam)
+
+slammiddle <- "/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/epimemintegrate_data/Slamseq/middle_data/"
+# need to fix the sample name
+Slam_orfSizeFactors_deeptools <- data.frame(sample = names(SLAMorfSizeFactors),
+                            Scaling = 1 / SLAMorfSizeFactors) %>%
+  # mutate(sample = str_replace_all(sample, "\\.", "-")) %>%
+  mutate(sample = paste0("SLAMSEQ_",sample, ".bam"))
+
+saveRDS(Slam_orfSizeFactors_deeptools, 
+        file.path(slammiddle, "Slam_orfSizeFactors_deeptools.rds"))
+
+write_delim(Slam_orfSizeFactors_deeptools, 
+            file.path(slammiddle, "Slam_orfSizeFactors_deeptools.txt"), delim = "\t", col_names = F)
+```
+
+```{bash fix the file name}
+# on Mac
+cd /Users/bingnanli/Downloads/slamseq/twoconversion/results/slamdunk/bam
+
+cat renameslambam.txt | parallel -a - -j 4 -C "\t" mv {1} {2}
+cat renameslambam.txt | parallel -a - -j 4 -C "\t" mv {1}.bai {2}.bai
+```
+
+```{bash generate bigwig files strand specific}
+cd /Users/bingnanli/Downloads/slamseq/twoconversion/results/slamdunk/bam
+
+cat Slam_orfSizeFactors_deeptools.txt | parallel -j 2 --colsep '\t' -a - bamCoverage -bs=1 -p=2 --scaleFactor {2} --filterRNAstrand forward -b {1} -o ./slambw/{1.}.watson.bw 
+
+cat Slam_orfSizeFactors_deeptools.txt | parallel -j 2 --colsep '\t' -a - bamCoverage -bs=1 -p=2 --scaleFactor {2} --filterRNAstrand reverse -b {1} -o ./slambw/{1.}.crick.bw
+```
+
+## SLAMSEQ nascent reads bigwig file
+convertion > =2 is regarded as nascent
+```{python extract nascent reads into a new file}
+import os
+import glob
+os.chdir("/Users/bingnanli/Downloads/slamseq/twoconversion/results/slamdunk/bam/")
+
+bamfiles = glob.glob("*.bam")
+
+def takenascent(self):
+    infile = pysam.AlignmentFile(self, "rb")
+    out = os.path.splitext(self)[0] + "_nascent.bam"
+    outfile = pysam.AlignmentFile(out, "wb", template=infile)
+    for read in infile.fetch():
+        if read.get_tag('TC:i') > 1 :
+            outfile.write(read)
+    outfile.close()
+    infile.close()
+
+for file in bamfiles:
+    takenascent(file)
+
+for file in bamfiles:
+    pysam.index(os.path.splitext(file)[0] + "_nascent.bam")
+```
+
+```{bash generate bigwig files strand specific}
+cd /Users/bingnanli/Downloads/slamseq/twoconversion/results/slamdunk/bam
+
+cat Slam_orfSizeFactors_deeptools_nascent.txt | parallel -j 2 --colsep '\t' -a - bamCoverage -bs=1 -p=2 --scaleFactor {2} --filterRNAstrand forward -b {1} -o ./slambw/{1.}.watson.bw 
+
+cat Slam_orfSizeFactors_deeptools_nascent.txt | parallel -j 2 --colsep '\t' -a - bamCoverage -bs=1 -p=2 --scaleFactor {2} --filterRNAstrand reverse -b {1} -o ./slambw/{1.}.crick.bw
+```
