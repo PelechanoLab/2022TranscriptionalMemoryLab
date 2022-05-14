@@ -1,0 +1,1569 @@
+---
+title: "pipeline: RNASEQ"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+# I Calculation
+
+## 1 defind the path, structure and load package
+
+```{r source project direcotry structure, eval=FALSE, include=FALSE}
+source("/Users/bingnanli/git/epimemintegrate/path.R")
+```
+
+### data loading
+```{r data loading}
+rld <- readRDS(file.path(RNADataMiddleNewAnno, "rld_norm_T0First.rds"))
+# g.tx <- readRDS(file.path(annotationdir, "gtx_update2019.rds"))
+lfc <- readRDS(file.path(RNADataMiddleNewAnno, "lfc_norm_T0First.rds"))
+GeneGroup_good <- readRDS(file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+dds <- readRDS(file.path(RNADataMiddleNewAnno, "dds_norm_T0First.rds"))
+gtx_update2019 <- readRDS(file.path(annotationdir,"gtx_update2019.rds"))
+dict <- readRDS(file.path(annotationdir, "seqnamedict.rds"))
+Roman.g.tx_nointron <- readRDS(file.path(annotationdir,"Roman.g.tx_nointron.rds"))
+dds_orf <- readRDS(file.path(RNADataMiddle, "dds_orf.rds"))
+
+# previous gtx data
+load("/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/RNAaverageSI/dataset/gtx.RData")
+
+# remove grid
+rmgrid <- theme(panel.border = element_blank(), 
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(), 
+                axis.line = element_line(colour = "black"))
+```
+
+
+## 2 align to genome
+```{bash align to genome}
+##################################
+# 1 align to saccer3 UCSC genome
+##################################
+
+export $PDIR
+cd $PDIR
+mkdir AlignToGenome
+cd trimmed
+
+# prepare commands
+find *.gz | awk -F"_" '{print $2}' | awk -F"\." '{print $1}' | xargs -i echo STAR --runThreadN 16    --alignIntronMin 13    --alignIntronMax 2482    --genomeDir \$STARINX    --readFilesIn  ../trimmed/trimmed_{}.fq.gz  --readFilesCommand zcat    --outFileNamePrefix {}    --outSAMtype BAM SortedByCoordinate    --limitBAMsortRAM 66014249400    --outFilterMismatchNmax 4 > alignToGenome.sh
+
+## add header to file alignToGenome.sh
+
+#!/bin/bash
+#SBATCH -A snic2017-7-121
+#SBATCH -p core
+#SBATCH -n 16
+#SBATCH -t 6:00:00
+#SBATCH -J AlignToGenome·
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=bingnan.li@scilifelab.se
+export STARINX=/home/binli/refs/SC/SGD/genome/sacCer3_SIRV/STAR
+export $PDIR
+cd $PDIR/AlignToGenome
+module load bioinfo-tools star/2.5.3a
+
+## add to the very bottom to the script
+rename Aligned.sortedByCoord.out.bam .bam *.bam
+module load bioinfo-tools MultiQC/1.7
+multiqc .
+mv multiqc_report.html multiqc_STAR_Genome.html
+```
+
+
+## 3 featurecounts to count from bam file
+
+```{bash featurecount from bamfile}
+## 1 count sense
+interactive16
+module load bioinfo-tools subread/1.5.2
+module load bioinfo-tools MultiQC/1.7
+
+export PDIR=/home/binli/memory/RNAavgSI
+cd $PDIR
+mkdir FeatureCounts
+
+# export ann=/home/binli/refs/SC/SGD/ann/Chenyu/CUT_SUT_ORFT_final.gtf
+export ann=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/gtx_update2019.saf
+
+cd FeatureCounts
+featureCounts -T 16 \
+-s 2 \
+-a $ann \
+-F SAF \
+-C \
+-o CSORFcounts.txt \
+../AlignToGenome/*.bam
+
+## trim first line also modify header
+cd $PDIR/FeatureCounts
+sed '1d' CSORFcounts.txt | sed 's/\.bam//g' | sed 's/\.\.\/AlignToGenome\///g'  > CSORFcounts_ready.txt
+
+#  The SAF format includes five required columns for each feature: feature
+# identifier, chromosome name, start position, end position and strand.
+
+```
+
+## 4 DESEQ
+
+#### 4.1 Load count data from FeatureCounts
+
+```{r load raw count data from featurecounts}
+count <-  read.delim2(file.path(RNADataRaw, "CSORFcounts_ready.txt"))
+# Adjust row names	
+rownames(count) <- count$Geneid
+count <- count[,7:54]
+# adjust col sequence
+columnorder <- c("BY.batch1.1st.000", 
+                 "BY.batch1.1st.30min", 
+                 "BY.batch1.1st.1h",
+                 "BY.batch1.1st.3h", 
+                 "BY.batch1.2nd.000", 
+                 "BY.batch1.2nd.15min",
+                 "BY.batch1.2nd.30min", 
+                 "BY.batch1.2nd.1h", 
+                 "RRP6.batch1.1st.000",
+                 "RRP6.batch1.1st.30min",  
+                 "RRP6.batch1.1st.1h", 
+                 "RRP6.batch1.1st.3h",
+                 "RRP6.batch1.2nd.000", 
+                 "RRP6.batch1.2nd.15min", 
+                 "RRP6.batch1.2nd.30min",
+                 "RRP6.batch1.2nd.1h", 
+                 "BY.batch2.1st.000", 
+                 "BY.batch2.1st.30min",
+                 "BY.batch2.1st.1h", 
+                 "BY.batch2.1st.3h", 
+                 "BY.batch2.2nd.000",
+                 "BY.batch2.2nd.15min", 
+                 "BY.batch2.2nd.30min", 
+                 "BY.batch2.2nd.1h",
+                 "RRP6.batch2.1st.000", 
+                 "RRP6.batch2.1st.30min", 
+                 "RRP6.batch2.1st.1h",
+                 "RRP6.batch2.1st.3h", 
+                 "RRP6.batch2.2nd.000", 
+                 "RRP6.batch2.2nd.15min",
+                 "RRP6.batch2.2nd.30min", 
+                 "RRP6.batch2.2nd.1h", 
+                 "BY.batch3.1st.000",
+                 "BY.batch3.1st.30min", 
+                 "BY.batch3.1st.1h", 
+                 "BY.batch3.1st.3h",
+                 "BY.batch3.2nd.000", 
+                 "BY.batch3.2nd.15min", 
+                 "BY.batch3.2nd.30min",
+                 "BY.batch3.2nd.1h", 
+                 "RRP6.batch3.1st.000", 
+                 "RRP6.batch3.1st.30min",
+                 "RRP6.batch3.1st.1h", 
+                 "RRP6.batch3.1st.3h", 
+                 "RRP6.batch3.2nd.000",
+                 "RRP6.batch3.2nd.15min", 
+                 "RRP6.batch3.2nd.30min", 
+                 "RRP6.batch3.2nd.1h")
+count <- count[, columnorder]
+```
+
+#### 4.1 prepare meta for DESEQ
+
+```{r prepare col data}
+cold <- data.frame(strain = factor(rep(rep(c("wt", "rrp6"), each = 8), 3)),
+                   minute = factor(rep(c("000", "005", "010", "030", "200", "202", "205", "210"), 6)),
+                   replicate = factor(rep(c("r1", "r2", "r3"), each = 16))) %>%
+  tibble::as_tibble() %>%
+  unite(col = sample, strain, minute, sep = "_", remove = T) %>%
+  mutate(sample= factor(sample)) %>%
+  as.data.frame()
+cold$sample <- relevel(cold$sample, ref = "wt_000")
+row.names(cold) <- names(count)
+```
+
+#### calculate the size factor from ORFs
+
+#### 4.2 extract orf
+
+```{r setup, include=FALSE}
+count_orf <- count[!grepl("CUT|SUT", rownames(count)), ] 
+```
+
+#### 4.3 calculate the size factor according to orf
+
+```{r calculate size factor according to coding, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+ddsFullCountTable_orf <- DESeqDataSetFromMatrix(countData = count_orf, colData = cold, design = ~ sample)
+dds_orf <- DESeq(ddsFullCountTable_orf)
+saveRDS(dds_orf, file.path(RNADataMiddle, "dds_orf.rds"))
+orfSizeFactors <- sizeFactors(dds_orf)
+```
+
+#### 4.4 calculate size factor for bw track
+
+```{r generate sizefactor for bw track, eval=FALSE, include=FALSE}
+orfSizeFactors_deeptools <- data.frame(sample = names(orfSizeFactors),
+                            Scaling = 1 / orfSizeFactors) %>%
+  mutate(sample = str_replace_all(sample, "\\.", "-")) %>%
+  mutate(sample = paste0(sample, ".bam"))
+saveRDS(orfSizeFactors_deeptools, 
+        file.path(RNADataMiddle, "orfSizeFactors_deeptools.rds"))
+write_delim(orfSizeFactors_deeptools, 
+            file.path(RNADataMiddle, "orfSizeFactors_deeptools.txt"), delim = "\t", col_names = F)
+```
+
+#### 4.5 run deseq uding the coding genes as normalisation factor
+
+```{r apply above size factor to global, message=FALSE, warning=FALSE, include=FALSE}
+dds  <- DESeqDataSetFromMatrix(countData = count, 
+                               colData = cold, 
+                               design = ~ sample)
+dds <- estimateSizeFactors(dds)
+sizeFactors(dds) <- orfSizeFactors
+dds <- estimateDispersions(dds)
+dds <- nbinomWaldTest(dds)
+rld <- rlog(dds, blind = F)
+```
+
+#### 4.6 extract normalised mean count
+
+```{r normalised counts}
+# extrac the normalised mean counts from RNASEQ
+baseMeanPerLvl <- sapply(levels(dds$sample), 
+                         function(lvl) rowMeans(counts(dds,normalized=TRUE)[,dds$sample == lvl]))
+baseMeanPerLvlcoding <- baseMeanPerLvl[! grepl("CUT|SUT", rownames(baseMeanPerLvl)),]
+# put the count in order
+baseMeanRNASEQorder <- c("wt_000", "wt_005", "wt_010", "wt_030", "wt_200", "wt_202", "wt_205", "wt_210", "rrp6_000", "rrp6_005", "rrp6_010", "rrp6_030", "rrp6_200", "rrp6_202", "rrp6_205", "rrp6_210")
+baseMeanPerLvl <- baseMeanPerLvl[, baseMeanRNASEQorder]
+```
+
+```{r function to extract the comparation}
+Res.Ex.withname <- function(sample, ref = "wt_000",  lfcThreshold = 0, alpha = 0.05) {
+  res <- results(dds,
+                 contrast = c("sample", sample, ref),
+                 lfcThreshold = lfcThreshold,
+                 alpha = alpha) 
+  names <- c("gene", paste(sample, "log2FoldChange", sep = "."), paste(sample, "padj", sep = "."))
+  res <- lfcShrink(dds = dds, contrast = c("sample", sample, ref), res = res, type = "ashr") %>%
+    data.frame() %>%
+    rownames_to_column(var = "gene") %>%
+    select(gene, log2FoldChange, padj) %>%
+    set_names(names)
+  return(res)
+}
+```
+
+```{r normalise to T0 only, message=FALSE, warning=FALSE}
+samples <- rbind(expand.grid(c("rrp6_005", "rrp6_010", "rrp6_030", "rrp6_200", "rrp6_202", "rrp6_205", "rrp6_210"), "rrp6_000", stringsAsFactors = F), 
+                 expand.grid(c("wt_005", "wt_010", "wt_030", "wt_200", "wt_202", "wt_205", "wt_210"), "wt_000", stringsAsFactors = F)
+)
+names(samples) <- c("sample", "ref")
+
+res.lfc.withname <- map2(as.list(samples$sample), as.list(samples$ref), ~ Res.Ex.withname(sample = .x, ref = .y)) %>%
+  set_names(samples$sample)
+lfc <- res.lfc.withname %>%
+  purrr::reduce(left_join, by = "gene")
+```
+
+##### save data 
+
+```{r save norm to T0 first only, eval=FALSE, include=FALSE}
+saveRDS(dds, file.path(RNADataMiddleNewAnno, "dds_norm_T0First.rds"))
+saveRDS(lfc, file.path(RNADataMiddleNewAnno, "lfc_norm_T0First.rds"))
+saveRDS(rld, file.path(RNADataMiddleNewAnno, "rld_norm_T0First.rds"))
+saveRDS(baseMeanPerLvl, file.path(RNADataMiddleNewAnno, "baseMeanPerLvl.rds"))
+```
+
+#### 4.7 generate bw track with sizefactor from only coding genes
+
+```{bash generate bw track with sizefactor from only coding genes}
+#!/bin/bash
+#SBATCH -A snic2017-7-121
+#SBATCH -p core
+#SBATCH -n 16
+#SBATCH -t 6:00:00
+#SBATCH -J bw_coding_norm
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=bingnan.li@scilifelab.se
+module load bioinfo-tools
+module load deepTools/3.1.0
+# generate bw without bin size 1
+cd /home/binli/memory/RNAavgSI/AlignToGenome
+
+cat orfSizeFactors_deeptools.txt | parallel -j 2 --colsep '\t' -a - bamCoverage -bs=1 -p=8 --scaleFactor {2} --filterRNAstrand forward -b {1} -o ../bw_coding_norm/{1.}.watson.bw 
+cat orfSizeFactors_deeptools.txt | parallel -j 2 --colsep '\t' -a - bamCoverage -bs=1 -p=8 --scaleFactor {2} --filterRNAstrand reverse -b {1} -o ../bw_coding_norm/{1.}.crick.bw
+```
+
+#### 4.8 OPTIONAL: could normalised to T0 and T0', but NOT the option taken in following analysis
+
+this only add extra work and does not make sense to spend extra efford
+and make things complicated, since the T0' barely demonstrate any
+difference from T0
+
+```{r normalise to T0 and T0 prime, message=FALSE, warning=FALSE}
+samples <- rbind(expand.grid(c("rrp6_005", "rrp6_010", "rrp6_030"),
+                             "rrp6_000", 
+                             stringsAsFactors = F), 
+                 expand.grid(c("rrp6_202", "rrp6_205", "rrp6_210"),
+                             "rrp6_200", 
+                             stringsAsFactors = F),
+                 expand.grid(c("wt_005", "wt_010", "wt_030"), 
+                             "wt_000", 
+                             stringsAsFactors = F),
+                 expand.grid(c("wt_202", "wt_205", "wt_210"), 
+                             "wt_200", 
+                             stringsAsFactors = F)
+)
+names(samples) <- c("sample", "ref")
+
+res.lfc.withname <- map2(as.list(samples$sample), as.list(samples$ref), ~ Res.Ex.withname(sample = .x, ref = .y)) %>%
+  set_names(samples$sample)
+
+lfc <- res.lfc.withname %>%
+  purrr::reduce(left_join, by = "gene")
+```
+
+```{r save data}
+saveRDS(lfc, file.path(RNADataMiddleNewAnno, "lfc_norm_T0FirstAndSecond.rds"))
+```
+
+#### 4.9 normalisation to remove strain effect when evaluating the memory
+
+```{r normalise the second induction with the last time point of first in lfc}
+lfc <- readRDS(file.path(RNADataMiddleNewAnno, "lfc_norm_T0First.rds"))
+lfc <- lfc %>%
+  mutate(
+    wt.minute202.time1.2.lfc.diff = wt_202.log2FoldChange - wt_030.log2FoldChange, #quantify memory  <<
+    wt.minute205.time1.2.lfc.diff = wt_205.log2FoldChange - wt_030.log2FoldChange, # in wt <<
+    wt.minute210.time1.2.lfc.diff = wt_210.log2FoldChange - wt_030.log2FoldChange, # <<
+    rrp6.minute202.time1.2.lfc.diff = rrp6_202.log2FoldChange - rrp6_030.log2FoldChange, #quantify memory <<
+    rrp6.minute205.time1.2.lfc.diff = rrp6_205.log2FoldChange - rrp6_030.log2FoldChange, # in rrp6 <<
+    rrp6.minute210.time1.2.lfc.diff = rrp6_210.log2FoldChange - rrp6_030.log2FoldChange, # <<
+    wt.rrp.diff.15min.lfc.diff = rrp6.minute202.time1.2.lfc.diff - wt.minute202.time1.2.lfc.diff, # memory difference # <<
+    wt.rrp.diff.30min.lfc.diff = rrp6.minute205.time1.2.lfc.diff - wt.minute205.time1.2.lfc.diff, # between BY vs rrp6 #<<
+    wt.rrp.diff.60min.lfc.diff = rrp6.minute210.time1.2.lfc.diff - wt.minute210.time1.2.lfc.diff) # #<<
+```
+
+#### 4.10 define criteria for memory
+
+```{r criteria for memory and function}
+FilterLFCrefine <- function(expressionfilter = 0, adjp = 0.001, memoryfilter = log2(1.5), rrpeffectsize = log2(1.5)) {
+  mylfc <- lfc %>%
+    mutate(wt.expression = case_when( # define activation or repression in WT
+      wt_030.log2FoldChange > expressionfilter &
+        wt_210.log2FoldChange > expressionfilter &
+        wt_030.log2FoldChange > wt_010.log2FoldChange &
+        wt_030.log2FoldChange > wt_005.log2FoldChange &
+        wt_030.padj < adjp &
+        wt_210.padj < adjp ~ "Act",
+      wt_030.log2FoldChange < (-1 * expressionfilter) &
+        wt_210.log2FoldChange < (-1 * expressionfilter) &
+        wt_030.log2FoldChange < wt_010.log2FoldChange &
+        wt_030.log2FoldChange < wt_005.log2FoldChange &
+        wt_030.padj < adjp &
+        wt_210.padj < adjp ~ "Repr",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(rrp.expression = case_when( # define activation or repression in rrp
+      rrp6_030.log2FoldChange > expressionfilter &
+        rrp6_210.log2FoldChange > expressionfilter &
+        rrp6_030.log2FoldChange > rrp6_010.log2FoldChange &
+        rrp6_030.log2FoldChange > rrp6_005.log2FoldChange &
+        rrp6_030.padj < adjp &
+        rrp6_210.padj < adjp ~ "Act",
+      rrp6_030.log2FoldChange < (-1 * expressionfilter) &
+        rrp6_210.log2FoldChange < (-1 * expressionfilter) &
+        rrp6_030.log2FoldChange < rrp6_010.log2FoldChange &
+        rrp6_030.log2FoldChange < rrp6_005.log2FoldChange &
+        rrp6_030.padj < adjp &
+        rrp6_210.padj < adjp ~ "Repr",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(wt.005.mem = case_when( # define memory for half an hour in WT
+      wt.expression == "Act" &
+        (wt_205.log2FoldChange - wt_005.log2FoldChange) > memoryfilter ~ "ActMem",
+      wt.expression == "Repr" &
+        (wt_005.log2FoldChange - wt_205.log2FoldChange) > memoryfilter ~ "ReprMem",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(wt.010.mem = case_when( # define memory for one hour in WT
+      wt.expression == "Act" &
+        (wt_210.log2FoldChange - wt_010.log2FoldChange) > memoryfilter  ~ "ActMem",
+      wt.expression == "Repr" &
+        (wt_010.log2FoldChange - wt_210.log2FoldChange) > memoryfilter  ~ "ReprMem",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(rrp.005.mem = case_when( # define memory for half an hour in rrp6
+      rrp.expression == "Act" &
+        (rrp6_205.log2FoldChange - rrp6_005.log2FoldChange) > memoryfilter ~ "ActMem",
+      rrp.expression == "Repr" &
+        (rrp6_005.log2FoldChange - rrp6_205.log2FoldChange) > memoryfilter  ~ "ReprMem",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(rrp.010.mem = case_when( # define memory one hour in rrp6
+      rrp.expression == "Act" &
+        (rrp6_210.log2FoldChange - rrp6_010.log2FoldChange) > memoryfilter  ~ "ActMem",
+      rrp.expression == "Repr" &
+        (rrp6_010.log2FoldChange - rrp6_210.log2FoldChange) > memoryfilter  ~ "ReprMem",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(wt.mem = case_when(
+      wt.005.mem == "ActMem" |
+        wt.010.mem == "ActMem" ~ "ActMem",
+      wt.005.mem == "ReprMem" |
+        wt.010.mem == "ReprMem" ~ "ReprMem",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(rrp.mem = case_when(
+      rrp.005.mem == "ActMem" |
+        rrp.010.mem == "ActMem" ~ "ActMem",
+      rrp.005.mem == "ReprMem" |
+        rrp.010.mem == "ReprMem" ~ "ReprMem",
+      TRUE ~ "NoInfo"
+    )) %>%
+    mutate(rrp_mem_effect = case_when( # define how much rrp6 has played a role here
+      wt.mem == "ActMem" & rrp.mem == "ActMem" &
+        rrp6.minute202.time1.2.lfc.diff - wt.minute202.time1.2.lfc.diff  > rrpeffectsize ~ "ActMemEnh",
+      wt.mem == "ReprMem" & rrp.mem == "ReprMem" &
+        rrp6.minute202.time1.2.lfc.diff - wt.minute202.time1.2.lfc.diff  < -1 * rrpeffectsize ~ "ReprMemEnh",
+      wt.mem == "ActMem" & rrp.mem == "ActMem" &
+        rrp6.minute202.time1.2.lfc.diff - wt.minute202.time1.2.lfc.diff  < -1 * rrpeffectsize ~ "ActMemAttenu",
+      wt.mem == "ReprMem" & rrp.mem == "ReprMem" &
+        wt.minute202.time1.2.lfc.diff - rrp6.minute202.time1.2.lfc.diff  < -1 * rrpeffectsize ~ "ReprMemAttenu",
+      TRUE ~ "NoInfo"
+    ))
+  return(mylfc)
+}
+
+GenerateCluster <- function(whichGeneAnno = GeneAnno, includerrpeffect = T, rrpmerge = F) {
+  myMainCluster <- whichGeneAnno %>%
+    mutate(
+      expression = case_when(
+        wt.expression == "Act" &
+          rrp.expression == "Act" ~ "Act",
+        wt.expression == "Repr" &
+          rrp.expression == "Repr" ~ "Repr",
+        TRUE ~ "NoInfo"
+      )) %>% 
+    mutate(
+      mem = case_when(
+        expression == "Act" &
+        wt.mem == "ActMem" &
+          rrp.mem == "ActMem" ~ "ActMem",
+        expression == "Repr" &
+        wt.mem == "ReprMem" &
+          rrp.mem == "ReprMem" ~ "ReprMem",
+        TRUE ~ "NoInfo"
+      )
+    ) # priority Rep > Act, ReprMem > ActMem
+  if ( includerrpeffect == T & rrpmerge == F  ) {
+    myMainCluster <- myMainCluster %>%
+      unite("cluGroup",  
+            expression, 
+            mem, 
+            rrp_mem_effect, 
+            remove = F) %>%
+      select(gene, cluGroup) %>%
+      mutate_at(vars(contains("cluGroup")), as.factor)
+  } else if ( includerrpeffect == F) {
+    myMainCluster <- myMainCluster %>%
+      unite("cluGroup",  
+            expression, 
+            mem, 
+            remove = F) %>%
+      select(gene, cluGroup) %>%
+      mutate_at(vars(contains("cluGroup")), as.factor)
+  }
+  return(myMainCluster)
+}
+
+GenerateGeneAnno <- function(whichlfc = lfc) {
+  GeneAnno <- whichlfc %>%
+    select(gene, 
+           wt.expression, 
+           rrp.expression, 
+           wt.mem,
+           rrp.mem,
+           rrp_mem_effect) %>%
+    mutate_at(vars(contains("mem")), as.factor) %>%
+    mutate_at(vars(contains("expression")), as.factor)
+  return(GeneAnno)
+}
+```
+
+##### gene group finalised
+
+```{r gene groups}
+Genes <- FilterLFCrefine()
+saveRDS(Genes, file.path(RNADataMiddleNewAnno, "Genes.rds"))
+GeneGroup <- FilterLFCrefine() %>% GenerateGeneAnno()
+GeneGroup_good <- FilterLFCrefine() %>% GenerateCluster()
+saveRDS(GeneGroup_good, file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+```
+
+## 5 normalise with spike in
+```{r normalise with spike in}
+SpikeIn <- readRDS(file.path(RNADataMiddle, "SpikeIn.rds"))
+
+count <- count %>%
+  as.data.frame() %>%
+  mutate_if(is.numeric, as.integer) 
+
+sizeFactor <- SpikeIn 
+
+cold <- data.frame(strain = factor(rep(rep(c("wt", "rrp6"), each = 8), 3)),
+                   minute = factor(rep(c("000", "005", "010", "030", "200", "202", "205", "210"), 6)),
+                   replicate = factor(rep(c("r1", "r2", "r3"), each = 16))) %>%
+  tibble::as_tibble() %>%
+  unite(col = sample, strain, minute, sep = "_", remove = T) %>%
+  mutate(sample= factor(sample)) %>%
+  as.data.frame()
+cold$sample <- relevel(cold$sample, ref = "wt_000")
+row.names(cold) <- names(count)
+
+dds <- DESeqDataSetFromMatrix(countData = count, colData = cold, design = ~ sample)
+dds <- estimateSizeFactors(dds)
+sizeFactors(dds) <- sizeFactor
+dds <- estimateDispersions(dds)
+dds <- nbinomWaldTest(dds)
+
+baseMeanPerLvl <- sapply(levels(dds$sample), function(lvl) rowMeans(counts(dds,normalized=TRUE)[,dds$sample == lvl]))
+baseMeanRNASEQorder <- c("wt_000", "wt_005", "wt_010", "wt_030", "wt_200", "wt_202", "wt_205", "wt_210", "rrp6_000", "rrp6_005", "rrp6_010", "rrp6_030", "rrp6_200", "rrp6_202", "rrp6_205", "rrp6_210")
+baseMeanPerLvl <- baseMeanPerLvl[, baseMeanRNASEQorder]
+```
+
+# II Ploting For Papers
+
+### Fig2 
+#### Fig2A Heatmap + Fig2 memory index plot
+
+only plot ORFts
+
+```{r load package for heatmap}
+# the heatmap plot the gene expression scaled to its own max value
+suppressPackageStartupMessages(library('reshape2'))
+suppressPackageStartupMessages(library(viridis))
+suppressPackageStartupMessages(library(ComplexHeatmap))
+suppressPackageStartupMessages(library(circlize)) # for function colorRamp2
+suppressPackageStartupMessages(library(ggthemes))
+suppressPackageStartupMessages(library(tidyverse))
+```
+
+```{r Figure 2A heatmap raw count with rld shrinked counts}
+# Heatmap is generated with rld wich will shrink the low expression noise
+rld <- readRDS(file.path(RNADataMiddleNewAnno, "rld_norm_T0First.rds"))
+
+GeneGroup_good <- readRDS(file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+GeneGroup_good_ORFt <- GeneGroup_good %>% filter(!grepl("CUT|SUT", gene))
+# input cluster 
+clusterHM <- GeneGroup_good_ORFt
+# sort column
+colorder <- c("BY.batch1.1st.000", 
+              "BY.batch2.1st.000",
+              "BY.batch3.1st.000",
+              "BY.batch1.1st.30min",
+              "BY.batch2.1st.30min",
+              "BY.batch3.1st.30min",
+              "BY.batch1.1st.1h",
+              "BY.batch2.1st.1h", 
+              "BY.batch3.1st.1h",
+              "BY.batch1.1st.3h",
+              "BY.batch2.1st.3h",
+              "BY.batch3.1st.3h",
+              "BY.batch1.2nd.000", 
+              "BY.batch2.2nd.000",
+              "BY.batch3.2nd.000",
+              "BY.batch1.2nd.15min",
+              "BY.batch2.2nd.15min",
+              "BY.batch3.2nd.15min",
+              "BY.batch1.2nd.30min",
+              "BY.batch2.2nd.30min",
+              "BY.batch3.2nd.30min", 
+              "BY.batch1.2nd.1h", 
+              "BY.batch2.2nd.1h", 
+              "BY.batch3.2nd.1h", 
+              "RRP6.batch1.1st.000",
+              "RRP6.batch2.1st.000",
+              "RRP6.batch3.1st.000",
+              "RRP6.batch1.1st.30min",
+              "RRP6.batch2.1st.30min",
+              "RRP6.batch3.1st.30min",
+              "RRP6.batch1.1st.1h",
+              "RRP6.batch2.1st.1h",
+              "RRP6.batch3.1st.1h",
+              "RRP6.batch1.1st.3h",
+              "RRP6.batch2.1st.3h",
+              "RRP6.batch3.1st.3h",
+              "RRP6.batch1.2nd.000",
+              "RRP6.batch2.2nd.000",
+              "RRP6.batch3.2nd.000",
+              "RRP6.batch1.2nd.15min",
+              "RRP6.batch2.2nd.15min",
+              "RRP6.batch3.2nd.15min",
+              "RRP6.batch1.2nd.30min",
+              "RRP6.batch2.2nd.30min",
+              "RRP6.batch3.2nd.30min", 
+              "RRP6.batch1.2nd.1h", 
+              "RRP6.batch2.2nd.1h", 
+              "RRP6.batch3.2nd.1h")
+
+batches <- cross(list(c("BY.", "RRP6."), 
+                      c("batch"), 
+                      c("1", "2", "3"))) %>% 
+  map(lift(paste0)) %>% 
+  unlist()
+
+batches_sample <- map(batches, ~ colorder[grepl(.x, colorder)] )
+
+# assay get raw data for main heatmap
+batches_sample_mt <- map(batches_sample, ~  assay(rld)[,.x]) 
+batches_sample_mt_norm <- map(batches_sample_mt, ~ t(apply(.x, 1, function(x) x/max(x)))) %>%
+  map(~ as.data.frame(.x) %>% rownames_to_column(var = "gene"))
+summarisemt <- purrr::reduce(batches_sample_mt_norm, left_join, by = "gene")
+summarisemt <- summarisemt[,c("gene", colorder)] 
+
+# reorder group level
+grouplevels  <- c("Act_ActMem_ActMemEnh", 
+                  "Act_ActMem_NoInfo",
+                  "Act_ActMem_ActMemAttenu",
+                  "Act_NoInfo_NoInfo",
+                  "NoInfo_NoInfo_NoInfo", 
+                  "Repr_NoInfo_NoInfo", 
+                  "Repr_ReprMem_ReprMemAttenu", 
+                  "Repr_ReprMem_NoInfo", 
+                  "Repr_ReprMem_ReprMemEnh")
+
+# Cluster Info
+clusterHM_ORFt <- clusterHM %>%
+  arrange(cluGroup) %>%
+  filter(!grepl("CUT|SUT", gene))
+
+# reoder
+clusterHM_ORFt$cluGroup <- factor(clusterHM_ORFt$cluGroup, levels = grouplevels)
+
+#  remove the Noninformative genes
+gene_count_hm_mygene <- clusterHM_ORFt %>%
+  arrange(cluGroup) %>%
+  filter(!grepl("NoInfo_NoInfo_NoInfo", cluGroup)) %>%
+  select(gene) %>%
+  left_join(summarisemt, by = "gene") 
+
+## for LFC
+# >> 1 mark annotation Gal gene names ------> ------------> -------> ------------
+# name from g.tx
+sysnameTogenename <- data.frame(name =  str_replace_all(g.tx$name, " ", ""), 
+                                comName = str_replace_all(g.tx$comName, " ", "")) %>%
+  mutate(name = str_replace_all(name, ",", ";"), 
+         comName = str_replace_all(comName, ",", ";")) %>%
+  dplyr::rename(gene = name) 
+
+# take order from Heeatmap matrix
+Galorder <- str_replace_all(gene_count_hm_mygene$gene, c("; " = ";", "-t" = ";t"))
+# check if gene name from Heatmap matrix match
+setdiff(Galorder, sysnameTogenename$gene)
+
+tmp <- sysnameTogenename$comName
+names(tmp) <- sysnameTogenename$gene
+sysnameTogenename <- tmp
+
+# reorder according to GeneGroup_good_ORFt
+sysnameTogenename <- sysnameTogenename[Galorder]
+
+Gals <- sysnameTogenename[str_detect(sysnameTogenename, "GAL")]
+Gals %in% sysnameTogenename
+
+ha_Gal = rowAnnotation(foo = anno_mark(at = match(Gals, sysnameTogenename), labels = Gals))
+# <---- annotation for Gal genes done <---- <---- <---- <---- <---- <---->
+
+
+# >> memindex_ha---> add memory index annotation -----
+sum(!(gene_count_hm_mygene$gene %in% lfc$gene))
+
+quantile(lfc$wt.minute202.time1.2.lfc.diff)
+
+indexorder <- gene_count_hm_mygene %>% 
+  select(gene) %>% 
+  left_join(lfc, by = "gene")  %>% 
+  left_join(clusterHM_ORFt, by = "gene") %>% 
+  select(gene, 
+         cluGroup, 
+         wt.minute202.time1.2.lfc.diff,
+         rrp6.minute202.time1.2.lfc.diff) %>% 
+  mutate(wt = case_when(grepl("ActMem", cluGroup) ~ wt.minute202.time1.2.lfc.diff + 5,
+                        grepl("ReprMem", cluGroup) ~ wt.minute202.time1.2.lfc.diff - 5,
+                        grepl("NoInfo", cluGroup) ~ 0),
+         rrp = case_when(grepl("ActMem", cluGroup) ~ rrp6.minute202.time1.2.lfc.diff + 5,
+                        grepl("ReprMem", cluGroup) ~ rrp6.minute202.time1.2.lfc.diff - 5,
+                        grepl("NoInfo", cluGroup) ~ 0))
+
+
+# Fig2D memory index ----
+indexorder_plot <- indexorder %>% 
+  filter(!grepl("CUT|SUT", gene)) %>%
+  select(wt, rrp, cluGroup) %>% 
+  gather(key = "strain", value = "memindex", wt, rrp)
+
+indexorder_plot$strain <- factor(indexorder_plot$strain, levels = c("wt", "rrp"))
+
+# induction memory index plot
+indexorder_plot %>%
+  filter(grepl("ActMem", cluGroup)) %>%
+  ggplot(aes(x = cluGroup, y = memindex, color = strain)) +
+  geom_jitter() + 
+  geom_boxplot() +rmgrid
+
+# repression memory index plot
+indexorder_plot %>%
+  filter(grepl("ReprMem", cluGroup)) %>%
+  ggplot(aes(x = cluGroup, y = memindex, color = strain)) +
+  geom_jitter() + 
+  geom_boxplot() +rmgrid
+
+indexorder_plot %>%
+  filter(grepl("ReprMem", cluGroup)) %>% pull()
+
+# Fig2A heatmap ----
+
+library(circlize)
+col_fun = colorRamp2(c(-5.5, 0, 5.5), c("blueviolet", "white", "deeppink"))
+memindex_ha_wt = rowAnnotation(wt = indexorder$wt, 
+                            col = list(wt = col_fun))
+memindex_ha_rrp = rowAnnotation(rrp = indexorder$rrp,
+                            col = list(rrp = col_fun))
+draw(memindex_ha_wt + memindex_ha_rrp)
+
+memindex_ra <- memindex_ha_wt + memindex_ha_rrp
+draw(memindex_ra)
+# >> Annotation For sample ----- ha_sample_names -------------
+
+# >> extract matrix for heatmap
+mt <- gene_count_hm_mygene[, -1] %>%
+  as.matrix()
+rownames(mt) <- gene_count_hm_mygene$gene
+
+ha_sample_names = HeatmapAnnotation(
+  strain = c(rep(c("wt", "rrp6"), each = 24)), 
+  induction = c(rep(rep(c("1st", "2nd"), each = 12),2)),
+  col = list(
+    strain = c("wt" = "#FFA4E3", "rrp6" = "#7C33B3"),
+    induction = c("1st" = "#8AFFA4", "2nd" = "#FF5E64")
+  ),
+  annotation_legend_param = list(
+    strain = list(
+      title = "Strain",
+      title_gp = gpar(col = "black", fontsize = 6),
+      labels = c("rrp6", "wt"),
+      labels_gp = gpar(col = "black", fontsize = 5),
+      grid_width = unit(2, "mm"),
+      grid_height = unit(2, "mm")
+    ),
+    induction = list(
+      title = "Galactose",
+      title_gp = gpar(col = "black", fontsize = 6),
+      labels = c("First", "Second"),
+      labels_gp = gpar(col = "black", fontsize = 5),
+      grid_width = unit(2, "mm"),
+      grid_height = unit(2, "mm")
+    )
+  ),
+  annotation_name_gp = gpar(col = "black", fontsize = 6),
+  annotation_name_side = "left",
+  na_col = "black",
+  simple_anno_size = unit(2, "mm")
+)
+draw(ha_sample_names)
+
+# >> Heatmap Generation ----------------------------------------------
+col_fun5 <- colorRamp2(c(1, 0.98, 0.95, 0.93, 0.9, 0.6), c("#440154FF", "#481567FF", "#482677FF", "#39568CFF", "#29AF7FFF", "#FDE725FF"))
+
+# Heatmap 
+# here add Gal annotation and sample annotation
+HM <- Heatmap( # heatmap for max norm
+  mt, 
+  #  name = "counts",
+  column_title = "counts scaled to max",
+  column_title_side = "bottom",
+  column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  row_title = "Genes",
+  row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  border = F,
+  cluster_rows = F,
+  cluster_columns = F,
+  show_row_names = FALSE,
+  column_names_gp = gpar(fontsize = 10),
+  column_split = factor(
+    rep(c("wt", "rrp6"), each = 24), 
+    levels = c("wt", "rrp6")
+  ),  # default base level is ∆rrp6, here redefine to wt to put it ahead
+  column_gap = unit(3, "mm"),
+  col = col_fun5,
+  heatmap_legend_param = list(
+    direction = "horizontal",
+    title = "Counts",
+    at = c(0.6, 0.8, 1),
+    title_gp = gpar(fontsize = 5, 
+                    fontface = "bold"),
+    labels_gp = gpar(fontsize = 10),
+    legend_width = unit(1, "cm"),
+    legend_height = unit(1, "mm")
+  ),
+  bottom_annotation = ha_sample_names,
+  width = unit(21, "cm"),
+  height = unit(27, "cm"),
+  use_raster = TRUE,
+  raster_quality = 3, 
+  right_annotation = ha_Gal) 
+
+# Gene Group annotation ---------------------------------------------------
+# remove the Noninformative genes
+memdf<- clusterHM_ORFt %>% 
+  arrange(cluGroup) %>%
+  filter(!grepl("NoInfo_NoInfo_NoInfo", cluGroup)) %>%
+  select(-gene)
+
+# define color for memory group
+col_mem <- c("Act_ActMem_ActMemEnh" = "firebrick",
+             "Act_ActMem_NoInfo" = "violetred2",
+             "Act_ActMem_ActMemAttenu" = "plum1",
+             "Act_NoInfo_NoInfo" = "tomato2",
+             "NoInfo_NoInfo_NoInfo" = "white", 
+             "Repr_NoInfo_NoInfo" = "dodgerblue",
+             "Repr_ReprMem_ReprMemEnh" = "midnightblue", 
+             "Repr_ReprMem_NoInfo" = "blue", 
+             "Repr_ReprMem_ReprMemAttenu" = "lightblue1") 
+col_ha_memorytype <- 
+  rowAnnotation(
+    df = memdf,
+    col = list(cluGroup = col_mem),
+    annotation_name_gp = gpar(col = "black", fontsize = 10),
+    show_legend = T,
+    annotation_legend_param = list(cluGroup = list(direction = "horizontal",
+                                                   title = "GeneGroup",
+                                                   title_gp = gpar(col = "black",fontsize = 6),
+                                                   # labels = c("Activation", "NoRespond", "Repression"),
+                                                   labels_gp = gpar(col = "black", fontsize = 10),
+                                                   grid_width = unit(4, "mm"),
+                                                   grid_height = unit(4, "mm"))),
+    width = unit(10, "mm"),
+    simple_anno_size_adjust = T)
+
+# check annotation   ------
+draw(col_ha_memorytype)
+draw(memindex_ra)
+draw(memindex_ra + col_ha_memorytype)
+# combine and make pdf ----------------------------------------------------
+
+# check how it looks by assembling everything
+HM + memindex_ra + col_ha_memorytype
+
+# >> pdf export ----
+pdf("RNAHeatmap.pdf", width=20, height=16)
+HM + memindex_ra + col_ha_memorytype
+dev.off()
+```
+
+#### Fig2B  PCA plot
+
+```{r Fig2B PCA plot}
+rld <- readRDS(file.path(RNADataMiddleNewAnno, "rld_norm_T0First.rds"))
+# PCA plot with CUTs
+pcaData <- plotPCA(rld, intgroup=c("replicate", "sample"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+p <- ggplot(pcaData, aes(PC1, PC2, color=sample, shape=replicate)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+# >> export Fig2B PCA with CUTs pdf ----
+pdf("PCA_with_CUTs.pdf", width=10, height=8)
+p
+dev.off()
+
+
+# PCA plot without CUTs
+dds <- readRDS(file.path(RNADataMiddleNewAnno, "dds_norm_T0First.rds"))
+# kict out CUTs and SUTs
+dds_nocut <- dds[!grepl("CUT|SUT",rownames(counts(dds))),]
+rld_nocut <- rlog(dds_nocut, blind = F)
+pcaData_nocut <- plotPCA(rld_nocut, intgroup=c("replicate", "sample"), returnData=TRUE)
+ggplot(pcaData_nocut, aes(PC1, PC2, color=sample, shape=replicate)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+### Fig S2
+
+#### Fig S2C MA plots for different time points
+
+```{r FigS2 B MA plot}
+# Fig S2 Load dds ----
+dds_orf <- readRDS(file.path(RNADataMiddle, "dds_orf.rds"))
+# Fig S2 define functions to extract res, MA plot ----
+getnum <- function(whichres = res_WT_prime_to_naive) {
+ sig <-  whichres %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "gene") %>% 
+  filter(!grepl("SUT|CUT", gene),
+         padj < 0.001)
+   numup <- sig %>% 
+  filter(log2FoldChange > 0) %>% 
+  pull(gene) %>% length()
+   numdown <- sig %>% 
+  filter(log2FoldChange < 0) %>% 
+  pull(gene) %>% length()
+ return(list(up = numup, down = numdown))
+}
+
+getres <- partial(results, 
+                  object = dds_orf,  
+                  lfcThreshold = 0,
+                  alpha = 0.001)
+
+myMA <- partial(plotMA, ylim=c(-11,11), colSig = "red",colLine = "grey40")
+
+# Fig S2 B 01 30min vs 0 naive in WT -----
+res_WT_30_0_naive  <- getres(contrast = c("sample", "wt_005", "wt_000"))
+myMA(res_WT_30_0_naive, main = "Time 0 Primed vs Naive in WT")
+getnum(res_WT_30_0_naive)
+# Fig S2 B 02 1 hour vs 0 naive in WT -----
+res_WT_1h_0_naive  <- getres(contrast = c("sample", "wt_010", "wt_000"))
+myMA(res_WT_1h_0_naive, main = "1 hour vs 0 hour Naive in WT")
+getnum(res_WT_1h_0_naive)
+# Fig S2 B 03 3 hour vs 0 naive in WT -----
+res_WT_3h_0_naive  <- getres(contrast = c("sample", "wt_030", "wt_000"))
+myMA(res_WT_3h_0_naive, main = "3 hour vs 0 hour Naive in WT")
+getnum(res_WT_3h_0_naive)
+# Fig S2 B 04 T0'to T0 in WT -----
+res_WT_15min_0p_prime  <- getres(contrast = c("sample", "wt_202", "wt_200"))
+myMA(res_WT_15min_0p_prime, main = "15min vs 0 Primed in WT")
+getnum(res_WT_15min_0p_prime)
+# Fig S2 B 05 T0'to T0 in WT -----
+res_WT_30min_0p_prime  <- getres(contrast = c("sample", "wt_205", "wt_200"))
+myMA(res_WT_30min_0p_prime, main = "30min vs 0 Primed in WT")
+getnum(res_WT_30min_0p_prime)
+# Fig S2 B 06 T0'to T0 in WT -----
+res_WT_1h_0p_prime  <- getres(contrast = c("sample", "wt_210", "wt_200"))
+myMA(res_WT_1h_0p_prime, main = "1 hour vs 0 Primed in WT")
+getnum(res_WT_1h_0p_prime)
+# Fig S2 B 07 T0'to T0 in WT -----
+res_WT_prime_to_naive  <- getres(contrast = c("sample", "wt_200", "wt_000"))
+myMA(res_WT_prime_to_naive, main = "Time 0 Primed vs Naive in WT")
+getnum(res_WT_prime_to_naive)
+```
+
+#### Fig S2H bar plots for wt and rrp6 time points
+```{r log fold change barplots for wt and rrp6}
+
+baseMeanPerLvl <- readRDS(file.path(RNAmiddle, "baseMeanPerLvl_norm_spike_in.rds"))
+
+trend_relative <- function(whichgenes = mygenes, whichstrain = "wt", ymin = 0, ymax = 1.5, type = "barplot") {
+  sampleorder <- c("wt_000","wt_005","wt_010","wt_030","wt_200","wt_202","wt_205","wt_210","rrp6_000","rrp6_005", "rrp6_010", "rrp6_030", "rrp6_200", "rrp6_202", "rrp6_205", "rrp6_210" )
+  baseMeanPerLvlcoding <- baseMeanPerLvl[!grepl("CUT|SUT", rownames(baseMeanPerLvl)),]
+  e <- baseMeanPerLvlcoding %>%
+    as.data.frame() %>% rownames_to_column(var = "gene")  %>%
+    right_join(whichgenes, by = "gene") %>% select(all_of(c("gene", sampleorder)))
+  
+  f_wt <- gather(e, key = "sample", value = "absolute", wt_000:wt_210)
+  
+  if ( whichstrain == "wt") {
+    f <- gather(e, key = "sample", value = "absolute", wt_000:wt_210) 
+    print("count wt")
+  } else if ( whichstrain == "rrp") {
+    f <- gather(e, key = "sample", value = "absolute", rrp6_000:rrp6_210) 
+    print("count rrp6")
+  } else if ( whichstrain == "all" ) {
+    f <- gather(e, key = "sample", value = "absolute", wt_000:rrp6_210) 
+    print("count all")
+  }
+  
+  g_wt <- f_wt %>%
+    group_by(sample) %>%
+    summarise(basesum = sum(absolute), basemean = mean(absolute, na.rm = T), basesc = sd(absolute, na.rm = T)) 
+  
+  g <- f %>%
+    group_by(sample) %>%
+    summarise(basesum = sum(absolute), basemean = mean(absolute, na.rm = T), basesc = sd(absolute, na.rm = T)) 
+  
+  g <- g %>%
+    mutate(ymin = basemean - basesc, 
+           ymax = basemean + basesc,
+           relativesum = basesum / pull(g_wt %>% filter(sample == "wt_000"), basesum)) 
+  
+  if (type == "lineplot") {
+      g$gene <- "gene"
+  p <- ggplot(g, aes(x = sample, y = basemean, ymin = ymin, ymax = ymax, group = gene)) +
+    geom_ribbon(alpha = 0.3) +
+    geom_point() +
+    geom_line(color = "firebrick", size = 1) 
+  } else if (type == "barplot") {
+  p <-  ggplot(g, aes(x = sample, y = relativesum)) + geom_bar(stat = "identity") +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+  }
+  p
+}
+
+
+
+mygenes <- baseMeanPerLvl[!grepl("CUT|SUT", rownames(baseMeanPerLvl)),] %>%
+  as.data.frame() %>% rownames_to_column(var = "gene") %>% select(gene)
+
+trend_relative(whichgenes = mygenes,  whichstrain = "wt")
+
+trend_relative(whichgenes = mygenes,  whichstrain = "rrp")
+```
+
+#### Fig S2I MAplot rrp6∆ vs wild type in T0 and T0'
+```{r Fig S2 D}
+# rrp6 T0 vs wt T0
+# rrp6 T0' vs wt T0'
+
+rld <- readRDS(file.path(RNADataMiddleNewAnno, "rld_norm_T0First.rds"))
+myrld <- assay(rld)
+
+baseMeanPerLvl <- sapply(levels(rld$sample), 
+                         function(lvl) rowMeans(myrld[,rld$sample == lvl]))
+
+RESstrainT0 <- results(dds, contrast = c("sample", "rrp6_000", "wt_000"), lfcThreshold = 0,
+                  alpha = 0.001) 
+RESstrainT20 <- results(dds, contrast = c("sample", "rrp6_200", "wt_200"), lfcThreshold = 0,
+                  alpha = 0.001) 
+
+BM <- baseMeanPerLvl %>% as.data.frame() %>% rownames_to_column(var = "gene")
+
+RESstrainT0df <- RESstrainT0 %>% as.data.frame() %>% rownames_to_column(var = "gene") %>%
+  mutate(type = case_when(grepl("CUT", gene) ~  "CUTs",
+                          grepl("SUT", gene) ~  "SUTs",
+                          TRUE ~ "orft")) %>% left_join(BM, by = "gene") %>% mutate(avg = (rrp6_000 + wt_000) / 2)
+#number on plot
+RESstrainT0df %>% filter(!grepl("CUT|SUT", gene)) %>% filter(padj < 0.001) %>% filter(log2FoldChange > 0) %>% dim
+RESstrainT0df %>% filter(!grepl("CUT|SUT", gene)) %>% filter(padj < 0.001) %>% filter(log2FoldChange < 0) %>% dim
+
+
+
+RESstrainT20df <- RESstrainT20 %>% as.data.frame() %>% rownames_to_column(var = "gene") %>%
+  mutate(type = case_when(grepl("CUT", gene) ~  "CUTs",
+                          grepl("SUT", gene) ~  "SUTs",
+                          TRUE ~ "orft")) %>% left_join(BM, by = "gene") %>% mutate(avg = (rrp6_200 + wt_200) / 2)
+
+# number on plot
+RESstrainT20df %>% filter(!grepl("CUT|SUT", gene)) %>% filter(padj < 0.001) %>% filter(log2FoldChange > 0) %>% dim
+RESstrainT20df %>% filter(!grepl("CUT|SUT", gene)) %>% filter(padj < 0.001) %>% filter(log2FoldChange < 0) %>% dim
+
+RESstrainT0df %>%
+  ggplot(aes(x = avg, y = log2FoldChange, color = type)) +
+  geom_point(size = 0.2)  + 
+  scale_x_log10()  + 
+  xlim(c(0, 18)) + 
+  geom_hline(yintercept = 0, color = "grey") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+RESstrainT20df %>%
+  ggplot(aes(x = avg, y = log2FoldChange, color = type)) +
+  geom_point(size = 0.2)  + 
+  scale_x_log10()  + 
+  xlim(c(0, 18)) + 
+  geom_hline(yintercept = 0, color = "grey") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+```
+
+### TableS2 
+
+```{r TableS2}
+RNADataMiddleNewAnno <- "/Users/bingnanli/Documents/Documents_BingnanLMBP/EPI_MEM/epimemintegrate_data/RNASEQ/middle_data/newannotation/"
+
+gtx_update2019 <- readRDS(file.path(annotationdir,"gtx_update2019.rds"))
+dic_name_comName <- readRDS(file.path(annotationdir, "dic_name_comName.rds"))
+
+# Load Raw Count/ S2A_raw_count
+dds <- readRDS(file.path(RNADataMiddleNewAnno, "dds_norm_T0First.rds"))
+rawcount <-  counts(dds) %>% data.frame() %>% rownames_to_column(var = "name") %>% left_join(dic_name_comName, by = "name") %>% relocate(comName, .before = BY.batch1.1st.000)
+# write_delim(rawcount, file = file.path(RNADataMiddleNewAnno, "raw.txt"))
+
+# Table S2B logfold change/  S2B  Log Fold Change
+dic_name_comName <- readRDS(file.path(annotationdir, "dic_name_comName.rds"))
+lfc <- readRDS(file.path(RNADataMiddleNewAnno, "lfc_norm_T0First.rds"))
+lfcexport <- lfc %>% left_join(dic_name_comName, by = c("gene" = "name" )) %>% relocate(comName, .before = rrp6_005.log2FoldChange)
+# write_delim(lfcexport, file = file.path(RNADataMiddleNewAnno, "lfcexport.txt"))
+
+# Load gene group
+GeneGroup_good <- readRDS(file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+
+# Table S2C gene groups sheet for table 
+grouplevels_exp_diction <- c("Induction Memory Enhanced", "Induction Memory Not Affected", "Induction Memory Attenuated", "Induction with No Memory", "Genes NotChanged", "Repression with NO Memeory", "Repression Memory Attenuated", "Repression Memory Not Affected", "Repression Memory Enhanced")
+names(grouplevels_exp_diction) <- grouplevels
+
+GeneGroup_ok <- GeneGroup_good %>% left_join(dic_name_comName, by = c("gene" = "name" )) %>% mutate(type = case_when(grepl("CUT", gene) ~ "CUT",
+                                           grepl("SUT", gene) ~ "SUT",
+                                           TRUE ~ "orft")) %>% 
+  mutate(group = recode(cluGroup, 
+                        "Act_ActMem_ActMemEnh"="Induction Memory Enhanced",
+                        "Act_ActMem_NoInfo"="Induction Memory Not Affected",
+                        "Act_ActMem_ActMemAttenu"="Induction Memory Attenuated",
+                        "Act_NoInfo_NoInfo"="Induction with No Memory",
+                        "NoInfo_NoInfo_NoInfo"="Genes NotChanged",
+                        "Repr_NoInfo_NoInfo"="Repression with NO Memeory",
+                        "Repr_ReprMem_ReprMemAttenu"="Repression Memory Attenuated",
+                        "Repr_ReprMem_NoInfo"="Repression Memory Not Affected",
+                        "Repr_ReprMem_ReprMemEnh"="Repression Memory Enhanced")) %>%
+  relocate(comName, .after = gene)
+
+
+Genes <- readRDS(file.path(RNADataMiddleNewAnno, "Genes.rds"))
+genes <- Genes %>% select(gene, wt.expression:rrp_mem_effect)
+
+# integrate  -----
+rawcount %>% rename(gene = name) %>%  left_join(lfcexport, by = c("gene", "comName")) %>%
+  left_join(genes, by = "gene") %>%left_join(GeneGroup_ok, by = "gene")  %>% select(-cluGroup)  %>%
+    write_delim(file.path(RNADataMiddleNewAnno, "TableS2B.txt"),  delim = "\t")
+
+# S2E difference between rrp6 and wt in naive 
+
+res_WT_rrp_naive <- readRDS(file.path(RNADataMiddleNewAnno, "res_WT_rrp_naive.rds"))
+
+res_WT_rrp_naive_df <- res_WT_rrp_naive %>%  as.data.frame() %>%
+  rownames_to_column(var = "gene")
+
+res_WT_rrp_naive_df %>%
+    left_join(dic_name_comName, by = c("gene" = "name" )) %>%
+  relocate(comName, .after = gene) %>%
+    mutate(type = case_when(grepl("CUT", gene) ~ "CUT",
+                                           grepl("SUT", gene) ~ "SUT",
+                                           TRUE ~ "orft"))  %>%
+    write_delim(file.path(RNADataMiddleNewAnno, "rrp_wt_naive.txt"),  delim = "\t")
+
+
+res_WT_rrp_naive_df %>% 
+  filter(!grepl("CUT|SUT", gene)) %>%
+  filter(padj < 0.05) %>% dim
+
+
+```
+
+
+### Fig 3 
+
+#### Fig 3 A promoter RNA accumulation raw data calculation
+```{r promoter RNA accumulation count step1}
+# step 1 genereate the annotation 
+promoter <- ORF.promoter.hotregion 
+promoter_anti <- ORF.promoter.reverse.hotregion
+#  The SAF format includes five required columns for each feature: feature
+# identifier, chromosome name, start position, end position and strand.
+
+promoter %>% as.data.frame() %>%
+  mutate(chr = recode(seqnames, 
+       "chrI"="I",
+       "chrII"="II",
+       "chrIII"="III",
+       "chrIV"="IV",
+       "chrV"="V",
+       "chrVI"="VI",
+       "chrVII"="VII",
+       "chrVIII"="VIII",
+       "chrIX"="IX",
+       "chrX"="X",
+       "chrXI"="XI",
+       "chrXII"="XII",
+       "chrXIII"="XIII",
+       "chrXIV"="XIV",
+       "chrXV"="XV",
+       "chrXVI"="XVI")) %>%
+  select(name, chr, start, end, strand) %>%
+  write_delim(file.path(RNADataMiddleNewAnno, "promoter.saf"),  delim = "\t", col_names = F)
+
+
+
+promoter_anti %>% as.data.frame() %>%
+  mutate(chr = recode(seqnames, 
+       "chrI"="I",
+       "chrII"="II",
+       "chrIII"="III",
+       "chrIV"="IV",
+       "chrV"="V",
+       "chrVI"="VI",
+       "chrVII"="VII",
+       "chrVIII"="VIII",
+       "chrIX"="IX",
+       "chrX"="X",
+       "chrXI"="XI",
+       "chrXII"="XII",
+       "chrXIII"="XIII",
+       "chrXIV"="XIV",
+       "chrXV"="XV",
+       "chrXVI"="XVI")) %>%
+  select(name, chr, start, end, strand) %>%
+  write_delim(file.path(RNADataMiddleNewAnno, "promoter_anti.saf"),  delim = "\t", col_names = F)
+```
+
+```{bash feature counts}
+
+interactive20
+module load bioinfo-tools subread/1.5.2
+module load bioinfo-tools MultiQC/1.7
+
+export PDIR=/home/binli/memory/RNAavgSI
+cd $PDIR
+mkdir FeatureCountsPromoter
+
+# export ann=/home/binli/refs/SC/SGD/ann/Chenyu/CUT_SUT_ORFT_final.gtf
+export ann=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/promoter.saf
+
+cd FeatureCountsPromoter
+featureCounts -T 16 \
+-s 2 \
+-a $ann \
+-F SAF \
+-C \
+-o CSPromotercounts.txt \
+../AlignToGenome/*.bam
+
+# antisense of promoter -150 -> -50 to TSS
+export ann_anti=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/promoter_anti.saf
+
+cd FeatureCountsPromoter
+featureCounts -T 16 \
+-s 2 \
+-a $ann_anti \
+-F SAF \
+-C \
+-o CSPromoter_anticounts.txt \
+../AlignToGenome/*.bam
+```
+
+```{r promoter normalise}
+#order
+columnorder <- c("BY01_1st_T0", 
+                 "BY01_1st_T30", 
+                 "BY01_2nd_T0",
+                 "BY01_2nd_T30", 
+                 "BY02_1st_T0", 
+                 "BY02_1st_T30",
+                 "BY02_2nd_T0", 
+                 "BY02_2nd_T30",
+                 "BY03_1st_T0",  
+                 "BY03_1st_T30", 
+                 "BY03_2nd_T0",
+                 "BY03_2nd_T30", 
+                 "rrp01_1st_T0", 
+                 "rrp01_1st_T30",
+                 "rrp01_2nd_T0", 
+                 "rrp01_2nd_T30", 
+                 "rrp02_1st_T0",
+                 "rrp02_1st_T30", 
+                 "rrp02_2nd_T0", 
+                 "rrp02_2nd_T30",
+                 "rrp03_1st_T0", 
+                 "rrp03_1st_T30", 
+                 "rrp03_2nd_T0",
+                 "rrp03_2nd_T30")
+
+#order
+columnorder <- c("BY.batch1.1st.000", 
+                 "BY.batch1.1st.30min", 
+                 "BY.batch1.1st.1h",
+                 "BY.batch1.1st.3h", 
+                 "BY.batch1.2nd.000", 
+                 "BY.batch1.2nd.15min",
+                 "BY.batch1.2nd.30min", 
+                 "BY.batch1.2nd.1h", 
+                 "RRP6.batch1.1st.000",
+                 "RRP6.batch1.1st.30min",  
+                 "RRP6.batch1.1st.1h", "RRP6.batch1.1st.3h",
+                 "RRP6.batch1.2nd.000", "RRP6.batch1.2nd.15min", "RRP6.batch1.2nd.30min",
+                 "RRP6.batch1.2nd.1h", "BY.batch2.1st.000", "BY.batch2.1st.30min",
+                 "BY.batch2.1st.1h", "BY.batch2.1st.3h", "BY.batch2.2nd.000",
+                 "BY.batch2.2nd.15min", "BY.batch2.2nd.30min", "BY.batch2.2nd.1h",
+                 "RRP6.batch2.1st.000", "RRP6.batch2.1st.30min", "RRP6.batch2.1st.1h",
+                 "RRP6.batch2.1st.3h", "RRP6.batch2.2nd.000", "RRP6.batch2.2nd.15min",
+                 "RRP6.batch2.2nd.30min", "RRP6.batch2.2nd.1h", "BY.batch3.1st.000",
+                 "BY.batch3.1st.30min", "BY.batch3.1st.1h", "BY.batch3.1st.3h",
+                 "BY.batch3.2nd.000", "BY.batch3.2nd.15min", "BY.batch3.2nd.30min",
+                 "BY.batch3.2nd.1h", "RRP6.batch3.1st.000", "RRP6.batch3.1st.30min",
+                 "RRP6.batch3.1st.1h", "RRP6.batch3.1st.3h", "RRP6.batch3.2nd.000",
+                 "RRP6.batch3.2nd.15min", "RRP6.batch3.2nd.30min", "RRP6.batch3.2nd.1h")
+
+#delete the first line header of this file
+promoter_count <-  read_delim(file.path(RNADataRaw, "CSPromotercounts.txt"), delim = "\t") %>% as.data.frame()
+# Adjust row names	
+rownames(promoter_count) <- promoter_count$Geneid
+promoter_count <- promoter_count[,7:54]
+colnames(promoter_count) <- str_replace_all(colnames(promoter_count), "../AlignToGenome/", "") %>% str_replace_all(".bam", "") %>% str_replace_all("-", ".")
+## run  chunk6 to get columnorder
+promoter_count <- promoter_count[, columnorder]
+## run chunk 7 
+row.names(cold) <- names(promoter_count)
+saveRDS(cold, file.path(RNADataMiddleNewAnno, "cold_promoter.rds"))
+# step 3 use the sizefactor generated by ORFts to normalise
+dds_promoter  <- DESeqDataSetFromMatrix(countData = promoter_count, 
+                               colData = cold, 
+                               design = ~ sample)
+dds_promoter <- estimateSizeFactors(dds_promoter)
+dds_orf <- readRDS(file.path(RNADataMiddle, "dds_orf.rds"))
+sizeFactors(dds_promoter) <- sizeFactors(dds_orf)
+dds_promoter <- estimateDispersions(dds_promoter)
+dds_promoter <- nbinomWaldTest(dds_promoter)
+saveRDS(dds_promoter, file.path(RNADataMiddleNewAnno, "dds_promoter.rds"))
+```
+
+```{r promoter antisense normalise}
+promoter_anti_count <-  read_delim(file.path(RNADataRaw, "CSPromoter_anticounts.txt"), delim = "\t") %>% as.data.frame()
+# Adjust row names	
+rownames(promoter_anti_count) <- promoter_anti_count$Geneid
+promoter_anti_count <- promoter_anti_count[,7:54]
+colnames(promoter_anti_count) <- str_replace_all(colnames(promoter_anti_count), "../AlignToGenome/", "") %>% str_replace_all(".bam", "") %>% str_replace_all("-", ".")
+
+## run  chunk6 to get columnorder
+promoter_anti_count <- promoter_anti_count[, columnorder]
+## run chunk 7 
+row.names(cold) <- names(promoter_anti_count)
+
+# step 3 use the sizefactor generated by ORFts to normalise
+dds_promoter_anti  <- DESeqDataSetFromMatrix(countData = promoter_anti_count, 
+                               colData = cold, 
+                               design = ~ sample)
+dds_promoter_anti <- estimateSizeFactors(dds_promoter_anti)
+dds_orf <- readRDS(file.path(RNADataMiddle, "dds_orf.rds"))
+sizeFactors(dds_promoter_anti) <- sizeFactors(dds_orf)
+dds_promoter_anti <- estimateDispersions(dds_promoter_anti)
+dds_promoter_anti <- nbinomWaldTest(dds_promoter_anti)
+saveRDS(dds_promoter_anti, file.path(RNADataMiddleNewAnno, "dds_promoter_anti.rds"))
+```
+
+#### Fig 3 A step 4 plot the promoter RNA accumulation
+
+```{r plot promoter}
+load(file.path(RNADataMiddleNewAnno, "promoter.RData"))
+
+promoter_expression <- function(basemean = baseMeanPerLvl_promoter, timepoint = "wt_000", group = "femgroup") {
+   df <- basemean %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene_name") %>% 
+  left_join(GeneGroup_table, by  = "gene_name")  %>%
+     select(cluGroup,wt_000,wt_200, rrp6_000, rrp6_200) %>%
+     gather(key = "time", value = "promoter", wt_000:rrp6_200) 
+#
+  df$time <- factor(df$time,levels = c("wt_000", "wt_200", "rrp6_000", "rrp6_200"))
+#
+  df %>%
+  ggplot(aes(x = time, y = promoter)) +
+  geom_jitter(size=0.3, alpha=0.4) +
+  geom_boxplot(color = "darkorange", alpha = 0.05) +
+  scale_y_log10(limits = c(1,1e5)) + facet_grid(cols = vars(cluGroup)) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+ }
+
+# plot sense promoter
+promoter_expression(basemean = baseMeanPerLvl_promoter)
+# plot promoter antisense
+promoter_expression(basemean = baseMeanPerLvl_promoter_anti)
+
+save(dds_promoter, dds_promoter_anti, promoter_expression, baseMeanPerLvl_promoter, baseMeanPerLvl_promoter_anti, file = file.path(RNADataMiddleNewAnno, "promoter.RData"))
+```
+
+### Fig S3
+
+#### Fig S3 A CUTs on promoter
+
+```{r CUTs on promoter}
+Roman.g.tx_nointron <- readRDS(file.path(annotationdir,"Roman.g.tx_nointron.rds"))
+
+GeneGroup_good <- readRDS(file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+GeneGroup_good %>% filter(!grepl("CUT|SUT", gene)) %>% pull(cluGroup) %>% table()
+
+GeneGroup_table <- GeneGroup_good %>% 
+  mutate(type = case_when(grepl("CUT", gene) ~ "CUT",
+                                           grepl("SUT", gene) ~ "SUT",
+                                           TRUE ~ "orft")) %>%
+  set_names(c("gene_name", "cluGroup", "type")) %>% 
+  mutate(femgroup = recode(cluGroup, 
+                        "Act_ActMem_ActMemEnh"="InductionMemory",
+                        "Act_ActMem_NoInfo"="InductionMemory",
+                        "Act_ActMem_ActMemAttenu"="InductionMemory",
+                        "Act_NoInfo_NoInfo"="InductionNoMemory",
+                        "NoInfo_NoInfo_NoInfo"="NotChanged",
+                        "Repr_NoInfo_NoInfo"="RepressionNOMemeory",
+                        "Repr_ReprMem_ReprMemAttenu"="RepressionMemory",
+                        "Repr_ReprMem_NoInfo"="RepressionMemory",
+                        "Repr_ReprMem_ReprMemEnh"="RepressionMemory")) %>%
+  mutate(group = recode(cluGroup, 
+                        "Act_ActMem_ActMemEnh"="Induction Memory Enhanced",
+                        "Act_ActMem_NoInfo"="Induction Memory Not Affected",
+                        "Act_ActMem_ActMemAttenu"="Induction Memory Attenuated",
+                        "Act_NoInfo_NoInfo"="Induction with No Memory",
+                        "NoInfo_NoInfo_NoInfo"="Genes NotChanged",
+                        "Repr_NoInfo_NoInfo"="Repression with NO Memeory",
+                        "Repr_ReprMem_ReprMemAttenu"="Repression Memory Attenuated",
+                        "Repr_ReprMem_NoInfo"="Repression Memory Not Affected",
+                        "Repr_ReprMem_ReprMemEnh"="Repression Memory Enhanced")) 
+
+
+
+saveRDS(GeneGroup_table, file.path(RNADataMiddleNewAnno, "GeneGroup_table.rds"))
+
+Roman.g.tx.cluster.ORF %>%
+  resize(150, fix = "start") %>%
+  resize(300, fix = "end")
+MytestCluster <- GeneGroup_table
+
+# ORF part
+Roman.g.tx_nointron.ORF <- Roman.g.tx_nointron[!grepl("CUT|SUT", Roman.g.tx_nointron$type)]
+### sense -150 -> 0
+ORF.promoter.hotregion <- Roman.g.tx_nointron.ORF %>%
+  resize(1, fix = "start") %>%
+  resize(150, fix = "end") %>%
+  resize(100, fix = "start") 
+## antisense -150 -> +50
+ORF.promoter.reverse.hotregion <- Roman.g.tx_nointron.ORF %>%
+  resize(50, fix = "start") %>%
+  resize(200, fix = "end") %>%
+  invertStrand()
+
+# CUTs part
+CUTs <- Roman.g.tx_nointron[Roman.g.tx_nointron$type == "CUTs"]
+
+# calculate the overlap between hotregion in promoter and CUTs
+## sense
+OVCUTsOnPromoter <- findOverlaps(ORF.promoter.hotregion, CUTs, ignore.strand = F)
+ov <- as.matrix(OVCUTsOnPromoter)
+## antisense
+OVCUTsOnPromoterReverse <- findOverlaps(ORF.promoter.reverse.hotregion, CUTs, ignore.strand = F)
+ovr <- as.matrix(OVCUTsOnPromoterReverse)
+
+# extract ORF that have overlaps
+
+ORFwithCUTs <- ORF.promoter.hotregion[ov[,1]]
+ORFwithCUTsRV <- ORF.promoter.reverse.hotregion[ovr[,1]]
+
+## integrate sense and antisense
+ORFCUTs <- data.frame(gene_name = union(ORFwithCUTs$name, ORFwithCUTsRV$name)) %>% left_join(GeneGroup_table, by = "gene_name")
+
+table(ORFCUTs$cluGroup)
+GeneGroup_good %>% filter(!grepl("CUT|SUT", gene)) %>% pull(cluGroup) %>% table()
+
+```
+
+#### Fig S3 B IGV tracks for GAL1/7/10
+
+chrII:273,997-281,350
+
+file directory: 
+~/Downloads/bw_coding_norm
+
+#### Fig S3 C Boxplot Global orft CUTs and SUTs
+
+```{r Fig S3 B Boxplot for global expression of orft CUTs and SUTs, eval=FALSE, include=FALSE}
+baseMeanPerLvl <- readRDS(file.path(RNADataMiddleNewAnno, "baseMeanPerLvl.rds"))
+
+globalexpression <- function(basemean = baseMeanPerLvl, timepoint = "wt_000") {
+  df <- basemean %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene") %>% 
+  mutate(genetype = case_when(!grepl("CUT|SUT", gene) ~ "ORFt",
+         grepl("CUT", gene) ~ "CUTs",
+         grepl("SUT", gene) ~"SUTs"))
+  df$genetype <- factor(df$genetype, levels = c("ORFt", "SUTs", "CUTs"))
+  df %>%
+  ggplot(aes_string(x = "genetype", y = timepoint)) +
+  geom_jitter(size=0.3, alpha=0.4) +
+  geom_boxplot(color = "darkorange", alpha = 0.05) +
+  scale_y_log10(limits = c(1,1e6)) + theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+ }
+
+globalexpression(timepoint = "wt_000")
+globalexpression(timepoint = "wt_200")
+globalexpression(timepoint = "rrp6_000")
+globalexpression(timepoint = "rrp6_200")
+
+df <- baseMeanPerLvl %>% as.data.frame() %>%
+  rownames_to_column(var = "gene") %>% 
+  mutate(genetype = case_when(!grepl("CUT|SUT", gene) ~ "ORFt",
+         grepl("CUT", gene) ~ "CUTs",
+         grepl("SUT", gene) ~"SUTs"))
+
+x <- df %>% filter(genetype == "CUTs") %>% pull(wt_000)
+y <- df %>% filter(genetype == "CUTs") %>% pull(wt_200)
+wilcox.test(x,y)
+median(x)
+median(y)
+```
+
+### TableS2 GO analysis
+
+```{r TableS3 GO}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("clusterProfiler")
+BiocManager::install("org.Sc.sgd.db")
+library("clusterProfiler")
+library(org.Sc.sgd.db)
+keytypes(org.Sc.sgd.db) 
+GeneGroup_good <- readRDS(file.path(RNADataMiddleNewAnno, "GeneGroup_good.rds"))
+extract.gene <- function(whichkeyword = "Act") {
+  mygene <-  GeneGroup_good %>%
+    filter(!grepl("CUT|SUT", gene)) %>%
+    filter(grepl(whichkeyword, cluGroup)) %>%
+    separate(gene, into = c("gene", "second"), sep = ";")
+  geneA <- mygene %>% pull(gene)
+  geneB <- mygene %>% pull(second)
+  geneB <- geneB[!is.na(geneB)]
+  mygenes <- c(geneA, geneB)
+  return(mygenes)
+}
+
+geneList <- extract.gene(whichkeyword = "_")
+
+up <- extract.gene(whichkeyword = "Act")
+act.all.ego <- enrichGO(up, universe = geneList, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(act.all.ego@result, file.path(RNADataMiddleNewAnno, "GO_act_all.tab"), delim = "\t")
+barplot(act.all.ego,showCategory=20,drop=T)
+
+
+repression <- extract.gene(whichkeyword = "Repr")
+repression.all.ego <- enrichGO(repression, universe = geneList, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(repression.all.ego@result, file.path(RNADataMiddleNewAnno, "GO_repression_all.tab"), delim = "\t")
+barplot(repression.all.ego,showCategory=20,drop=T)
+
+ActMem <- extract.gene(whichkeyword = "ActMem")
+ActMem.ego <- enrichGO(ActMem, universe = geneList, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(ActMem.ego@result, file.path(RNADataMiddleNewAnno, "GO_ActMem.tab"), delim = "\t")
+barplot(ActMem.ego,showCategory=20,drop=T)
+
+ReprMem <- extract.gene(whichkeyword = "ReprMem")
+ReprMem.ego <- enrichGO(ReprMem, universe = geneList, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(ReprMem.ego@result, file.path(RNADataMiddleNewAnno, "GO_ReprMem.tab"), delim = "\t")
+barplot(ReprMem.ego,showCategory=20,drop=T)
+
+ActMemEnh  <- extract.gene(whichkeyword = "ActMemEnh")
+ActMemEnh.ego <- enrichGO(ActMemEnh, universe = geneList, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(ActMemEnh.ego@result, file.path(RNADataMiddleNewAnno, "GO_ActMemEnh.tab"), delim = "\t")
+barplot(ActMemEnh.ego,showCategory=20,drop=T)
+
+# using induced genes as background instead of all coding genes.
+ActMemEnh_up_bg.ego <- enrichGO(ActMemEnh, universe = up, OrgDb = org.Sc.sgd.db, keyType = "ENSEMBL", ont = "BP",maxGSSize = 200)
+write_delim(ActMemEnh_up_bg.ego@result, file.path(RNADataMiddleNewAnno, "GO_ActMemEnh_up_bg.tab"), delim = "\t")
+```
+
+# FigS4 I codon optimality
+
+```{r codon optimality}
+codon <- read_delim(file.path(slamcodedir, "codon.txt"))
+
+codonoptimality <- GeneGroup_good %>% filter(!grepl("CUT|SUT", gene)) %>% mutate(geneName = str_replace_all(gene, ";[:alnum:]*", "")) %>% left_join(codon, by = "geneName")
+
+codonoptimality %>%
+  ggplot(aes(x= cluGroup, y = Coller)) +
+  geom_jitter() + 
+  geom_boxplot() +rmgrid
+```
