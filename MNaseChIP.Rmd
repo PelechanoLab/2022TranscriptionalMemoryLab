@@ -1,0 +1,177 @@
+---
+title: "MnaseSeq_ChIPseq"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# I.  nf core mnaseSeq workflow
+
+```{bash nf-core mnaseSeq}
+tmux new -s mnase
+# nextflow run nf-core/mnaseseq -r dev -profile test,uppmax --project snic2017-7-121 -bg
+export utrgenomefasta=/sw/data/uppnex/igenomes//Saccharomyces_cerevisiae/Ensembl/R64-1-1/Sequence/WholeGenomeFasta/genome.fa
+export bwaindex=/sw/data/uppnex/igenomes//Saccharomyces_cerevisiae/Ensembl/R64-1-1/Sequence/BWAIndex/genome.fa
+export utrgtf=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/gtx_update2019_test.gtf
+export fastqdir=/crex/proj/sllstore2017018/private/project/Trans_mem/ChIPseq/fastq
+export metadir=/home/binli/memory/ChIPseq2/meta/
+export utrbed=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/gtx_update2019.bed
+export blacklist=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/blacklist.bed
+module load bioinfo-tools Nextflow/20.10.0
+export NXF_HOME=/home/binli/.nextflow
+export NXF_SINGULARITY_CACHEDIR=/crex/proj/snic2019-30-56/bingnan/ChIPseq/nfcore_mnase/work/singularity
+export outdir=/crex/proj/sllstore2017018/private/project/Trans_mem/ChIPseq/fastq/test4
+
+cd $fastqdir
+nextflow run nf-core/mnaseseq \
+-r dev \
+--genome 'R64-1-1' \
+--fasta $utrgenomefasta \
+--gtf $utrgtf \
+--gene_bed $utrbed \
+--bwa_index $bwaindex \
+--input $metadir/samplesheetChIPseq.csv \
+-profile uppmax \
+--project snic2017-7-121 \
+--min_insert 100 \
+--max_insert 200 \
+-bg \
+--blacklist $blacklist \
+--outdir $outdir \
+--email bingnan.li@scilifelab.se \
+--email_on_fail bingnan.li@scilifelab.se \
+-c /domus/h1/binli/.nextflow/config
+```
+
+```{bash config file for nextflow mnase seq pipeline}
+# ==========================================================================
+#  /domus/h1/binli/.nextflow/config
+# ==========================================================================
+# solve the problem of exceeded memory
+# solve imcompatibility of python2 with multiple threads
+process {
+  withLabel:process_high {
+    cpus =  15
+    memory = '90 GB'
+    time = '5 h'
+  }
+  withLabel:process_medium {
+    cpus = 8
+    memory = '48 GB'
+    time = '3 h'
+  }
+}
+process {
+  withName:TrimGalore {
+    cpus = 1
+    memory = '6 GB'
+    time = '3h'
+  }
+}
+process {
+  withName:FastQC {
+    cpus = 6
+    memory = '36 GB'
+    time = '2h'
+  }
+}
+```
+
+```{bash}
+bigwigCompare -b1 H3K4me2_{1}_{2}_*.bw -b2 H3K4me3_{1}_{2}_*.bw -o ../compareHistone/H3K4me2_to_H3K4me3_{1}_{2}.bwcompare.bw
+
+cd /Users/bingnanli/Downloads/ChIPseq/test4/bwa/mergedReplicate/bigwig
+bigwigCompare -b1 H3K4me3_WT_t1.mRp.clN.Fnor.smooth.bigWig -b2 Input_WT_t1.mRp.clN.Fnor.smooth.bigWig -o H3K4me3_WT_t1.normed.bigWig --operation ratio
+
+```
+
+# II.  bw files replicate merged 
+with nucleosome dyad only (3 bp in center)
+
+**Tools** deeptools
+**Input:** merged bam files
+
+```{bash bw with dyad only}
+export outdir=/crex/proj/sllstore2017018/private/project/Trans_mem/ChIPseq/fastq/test4
+cd $outdir/bwa/mergedReplicate
+export blacklist=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/blacklist.chip.bed
+module load bioinfo-tools
+module load samtools/1.9
+bioinfo deepTools/3.1.0
+
+find *.bam | parallel -a - -j 8 bamCoverage -p 2 --bam {} -o ./bw/{.}.bw -of bigwig --binSize 1 --MNase --minFragmentLength 100 --maxFragmentLength 200 --normalizeUsing CPM --blackListFileName $blacklist
+```
+
+# III. bw files (not merged)
+with nucleosome dyad only (3 bp in center) for each replicate 
+
+**Tools** deeptools
+**Input:** each replicate bam files
+
+```{bash bw with dyad only}
+export outdir=/crex/proj/sllstore2017018/private/project/Trans_mem/ChIPseq/fastq/test4
+cd $outdir/bwa/mergedLibrary
+export blacklist=/crex/proj/sllstore2017018/private/project/Trans_mem/nextflow/assets/nf-core/blacklist.chip.bed
+module load bioinfo-tools
+module load samtools/1.9
+bioinfo deepTools/3.1.0
+
+find *.bam | parallel -a - -j 8 bamCoverage -p 2 --bam {} -o ./bw/{.}.bw -of bigwig --binSize 1 --MNase --minFragmentLength 100 --maxFragmentLength 200 --normalizeUsing CPM --blackListFileName $blacklist
+```
+
+
+
+# IV. Figure 3
+### Figure 3 plot metagene for 5 groups from center dyad bw files
+Actually four groups, because I kick out the genes that dont change 
+```{bash metagene plot for 5 gene groups}
+export outdir=/crex/proj/sllstore2017018/private/project/Trans_mem/ChIPseq/fastq/test4
+ANN_five=/domus/h1/binli/refs/final/newannotation/Roman.Orf.cluster.deepTools.FiveGroup.bed
+ANN_global=/domus/h1/binli/refs/final/newannotation/Roman.Orf.nochr.bed
+module load bioinfo-tools ucsc-utilities/v345
+module load deepTools/3.1.0
+module load gnuparallel/20180822
+# directory for bigwig files with only 3bp dyad of each nucleosome is taken
+cd $outdir/bwa/mergedReplicate/bw
+length=460
+
+################################################################
+# plot the global for each merged sample
+################################################################
+find *.bw | parallel -a - -j 2 computeMatrix reference-point --referencePoint TSS -b 460 -a $length --binSize 20 --missingDataAsZero --skipZeros -p 8 -R $ANN_global -S {} -o ./deeptools_single_file/{.}.gz
+cd deeptools_single_file
+find *.gz | parallel -a - -j 16 plotProfile -m {} -out {.}.pdf  --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 
+
+################################################################
+# plot the global for both strain, compare naive and prime
+################################################################
+cd $outdir/bwa/mergedReplicate/bw
+mkdir foursample
+parallel -j 4 computeMatrix reference-point --referencePoint TSS -b 460 -a $length --binSize 20 --missingDataAsZero --skipZeros -p 4 -R $ANN_global -S {}_*.bw -o ./foursample/{}.gz ::: Input H3K4me3 H3K4me2 
+
+cd $outdir/bwa/mergedReplicate/bw/foursample
+find *.gz | parallel -a - -j 3 plotProfile -m {} -out {.}.pdf --numPlotsPerRow 1 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 --perGroup 
+
+################################################################
+#
+# plot the five groups for both strain, compare naive and prime
+#
+################################################################
+cd $outdir/bwa/mergedReplicate/bw
+mkdir foursample_five
+parallel -j 3 computeMatrix reference-point --referencePoint TSS -b 460 -a $length --binSize 20 --missingDataAsZero --skipZeros -p 5 -R $ANN_five -S {}_*.bw -o ./foursample_five/{}.gz ::: Input H3K4me3 H3K4me2
+
+cd $outdir/bwa/mergedReplicate/bw/foursample_five
+find *.gz | parallel -a - -j 2 plotProfile -m {} -out {.}.pdf --numPlotsPerRow 4 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 --perGroup --averageType mean --yMin 0 --yMax 0.52
+
+find *.gz | parallel -a - -j 4 plotProfile -m {} -out {.}.each.pdf --numPlotsPerRow 4 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 --averageType mean --yMin 0 --yMax 0.52
+
+computeMatrix reference-point --referencePoint TSS -b 450 -a $length --binSize 15 --missingDataAsZero --skipZeros -p 16 -R $ANN -S `ls H3K4me3_*.bw` -o H3K4me3.gz
+plotProfile -m H3K4me3.gz -out H3K4me3_pergroup.pdf --numPlotsPerRow 3 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 --perGroup 
+plotProfile -m H3K4me3.gz -out H3K4me3.pdf --numPlotsPerRow 1 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 
+
+computeMatrix reference-point --referencePoint TSS -b 450 -a $length --binSize 15 --missingDataAsZero --skipZeros -p 16 -R $ANN -S `ls H3K4me2_*.bw` -o H3K4me2.gz
+plotProfile -m H3K4me2.gz -out H3K4me2_pergroup.pdf --numPlotsPerRow 3 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 --perGroup 
+plotProfile -m H3K4me2.gz -out H3K4me2.pdf --numPlotsPerRow 1 --plotFileFormat pdf --dpi 300 --plotHeight 21 --plotWidth 29 
+
+```
